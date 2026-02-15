@@ -59,6 +59,12 @@ enum Commands {
     Version,
     /// Show status of configuration and workspace
     Status,
+    /// Launch the TUI monitoring dashboard
+    Dashboard {
+        /// Config file path
+        #[arg(short, long)]
+        config: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +96,9 @@ async fn main() {
         }
         Some(Commands::Status) => {
             status_cmd().await;
+        }
+        Some(Commands::Dashboard { config }) => {
+            dashboard_cmd(config).await;
         }
         None => {
             // Default: run in interactive agent mode
@@ -575,4 +584,103 @@ async fn gateway_cmd(config_path: Option<String>) {
         eprintln!("{} Gateway error: {}", LOGO, e);
         std::process::exit(1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard command (TUI)
+// ---------------------------------------------------------------------------
+
+async fn dashboard_cmd(config_path: Option<String>) {
+    use crossterm::{
+        event::{self, Event, KeyCode, KeyModifiers},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use quectoclaw::tui::app::{LogLevel, TuiState};
+    use ratatui::prelude::CrosstermBackend;
+    use ratatui::Terminal;
+    use std::io;
+
+    let cfg = load_config(config_path.as_deref());
+    let state = TuiState::new();
+
+    // Count enabled channels
+    let mut channel_count = 0;
+    if cfg.channels.telegram.enabled {
+        channel_count += 1;
+    }
+    if cfg.channels.discord.enabled {
+        channel_count += 1;
+    }
+    if cfg.channels.slack.enabled {
+        channel_count += 1;
+    }
+    state.set_active_channels(channel_count).await;
+
+    // Push initial log
+    state
+        .push_log(LogLevel::Info, "Dashboard started".to_string())
+        .await;
+    state
+        .push_log(
+            LogLevel::Info,
+            format!("Config loaded: {} channels enabled", channel_count),
+        )
+        .await;
+
+    // Setup terminal
+    enable_raw_mode().expect("Failed to enable raw mode");
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen).expect("Failed to enter alternate screen");
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
+
+    let start_time = std::time::Instant::now();
+
+    // Main loop
+    loop {
+        // Update uptime
+        state.update_uptime(start_time.elapsed().as_secs()).await;
+
+        // Collect state for rendering
+        let logs = state.get_logs().await;
+        let sessions = state.get_sessions().await;
+        let stats = state.get_stats().await;
+
+        // Draw
+        terminal
+            .draw(|frame| {
+                quectoclaw::tui::ui::render(frame, &logs, &sessions, &stats);
+            })
+            .expect("Failed to draw");
+
+        // Poll for events (200ms timeout for smooth animation)
+        if event::poll(std::time::Duration::from_millis(200)).unwrap_or(false) {
+            if let Ok(Event::Key(key)) = event::read() {
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                    KeyCode::Char('c') => {
+                        // Clear logs (keep stats)
+                        state
+                            .push_log(LogLevel::Info, "Logs cleared".to_string())
+                            .await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if !state.is_running().await {
+            break;
+        }
+    }
+
+    // Restore terminal
+    disable_raw_mode().expect("Failed to disable raw mode");
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)
+        .expect("Failed to leave alternate screen");
+    terminal.show_cursor().expect("Failed to show cursor");
+
+    println!("{} Dashboard stopped.", LOGO);
 }

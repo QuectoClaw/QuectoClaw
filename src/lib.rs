@@ -10,3 +10,4 @@ pub mod logger;
 pub mod provider;
 pub mod session;
 pub mod tool;
+pub mod tui;
