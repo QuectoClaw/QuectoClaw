@@ -27,7 +27,5 @@ pub async fn append_memory(workspace: &str, entry: &str) -> anyhow::Result<()> {
 /// Read the agent's long-term memory.
 pub async fn read_memory(workspace: &str) -> String {
     let path = Path::new(workspace).join("memory").join("MEMORY.md");
-    tokio::fs::read_to_string(&path)
-        .await
-        .unwrap_or_default()
+    tokio::fs::read_to_string(&path).await.unwrap_or_default()
 }

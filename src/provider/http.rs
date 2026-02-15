@@ -17,7 +17,12 @@ pub struct HTTPProvider {
 }
 
 impl HTTPProvider {
-    pub fn new(api_key: String, api_base: String, proxy: Option<&str>, model: String) -> anyhow::Result<Self> {
+    pub fn new(
+        api_key: String,
+        api_base: String,
+        proxy: Option<&str>,
+        model: String,
+    ) -> anyhow::Result<Self> {
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(120))
             .connect_timeout(Duration::from_secs(30));
@@ -111,9 +116,260 @@ impl LLMProvider for HTTPProvider {
         parse_response(&response_body)
     }
 
+    async fn chat_stream(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        model: &str,
+        options: &HashMap<String, serde_json::Value>,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> anyhow::Result<()> {
+        let use_model = if model.is_empty() { &self.model } else { model };
+        let url = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
+
+        let mut body = json!({
+            "model": use_model,
+            "messages": messages,
+            "stream": true,
+        });
+
+        if !tools.is_empty() {
+            body["tools"] = serde_json::to_value(tools)?;
+        }
+
+        if let Some(obj) = body.as_object_mut() {
+            for (k, v) in options {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let err_body = response.text().await.unwrap_or_default();
+            let _ = tx
+                .send(StreamEvent::Error(format!("HTTP {}: {}", status, err_body)))
+                .await;
+            anyhow::bail!("LLM API error ({}): {}", status, err_body);
+        }
+
+        // Process SSE stream
+        process_sse_stream(response, tx).await
+    }
+
     fn default_model(&self) -> &str {
         &self.model
     }
+}
+
+/// Process an SSE byte stream into StreamEvents.
+async fn process_sse_stream(
+    response: reqwest::Response,
+    tx: tokio::sync::mpsc::Sender<StreamEvent>,
+) -> anyhow::Result<()> {
+    use futures_util::StreamExt;
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    // Accumulated state for building the final response
+    let mut full_content = String::new();
+    let mut finish_reason = String::from("stop");
+
+    // Tool call accumulation: index -> (id, name, arguments)
+    let mut tool_calls_acc: HashMap<usize, (String, String, String)> = HashMap::new();
+    let mut usage_info: Option<UsageInfo> = None;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = match chunk_result {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx
+                    .send(StreamEvent::Error(format!("Stream error: {}", e)))
+                    .await;
+                break;
+            }
+        };
+
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        // Process complete lines
+        while let Some(newline_pos) = buffer.find('\n') {
+            let line = buffer[..newline_pos].trim().to_string();
+            buffer = buffer[newline_pos + 1..].to_string();
+
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+
+            if let Some(data) = line.strip_prefix("data: ") {
+                let data = data.trim();
+                if data == "[DONE]" {
+                    // Build final response
+                    let tool_calls = if tool_calls_acc.is_empty() {
+                        None
+                    } else {
+                        let mut calls: Vec<_> = tool_calls_acc.drain().collect();
+                        calls.sort_by_key(|(idx, _)| *idx);
+                        Some(
+                            calls
+                                .into_iter()
+                                .map(|(_, (id, name, args))| super::ToolCall {
+                                    id,
+                                    call_type: Some("function".into()),
+                                    function: Some(super::FunctionCall {
+                                        name,
+                                        arguments: args,
+                                    }),
+                                    name: None,
+                                    arguments: None,
+                                })
+                                .collect(),
+                        )
+                    };
+
+                    let resp = LLMResponse {
+                        content: full_content.clone(),
+                        tool_calls,
+                        finish_reason: finish_reason.clone(),
+                        usage: usage_info.clone(),
+                    };
+                    let _ = tx.send(StreamEvent::Done(resp)).await;
+                    return Ok(());
+                }
+
+                // Parse the JSON delta
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    // Extract finish_reason
+                    if let Some(fr) = v
+                        .get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("finish_reason"))
+                        .and_then(|f| f.as_str())
+                    {
+                        finish_reason = fr.to_string();
+                    }
+
+                    // Extract usage if present
+                    if let Some(u) = v.get("usage") {
+                        usage_info = Some(UsageInfo {
+                            prompt_tokens: u
+                                .get("prompt_tokens")
+                                .and_then(|n| n.as_u64())
+                                .unwrap_or(0) as usize,
+                            completion_tokens: u
+                                .get("completion_tokens")
+                                .and_then(|n| n.as_u64())
+                                .unwrap_or(0)
+                                as usize,
+                            total_tokens: u
+                                .get("total_tokens")
+                                .and_then(|n| n.as_u64())
+                                .unwrap_or(0) as usize,
+                        });
+                    }
+
+                    if let Some(delta) = v
+                        .get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("delta"))
+                    {
+                        // Content delta
+                        if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                            if !content.is_empty() {
+                                full_content.push_str(content);
+                                let _ = tx.send(StreamEvent::Token(content.to_string())).await;
+                            }
+                        }
+
+                        // Tool call deltas
+                        if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                            for tc in tcs {
+                                let index =
+                                    tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+
+                                let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
+                                let name = tc
+                                    .get("function")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(|n| n.as_str())
+                                    .map(String::from);
+                                let args_fragment = tc
+                                    .get("function")
+                                    .and_then(|f| f.get("arguments"))
+                                    .and_then(|a| a.as_str())
+                                    .unwrap_or("");
+
+                                let entry = tool_calls_acc.entry(index).or_insert_with(|| {
+                                    (String::new(), String::new(), String::new())
+                                });
+
+                                if let Some(ref id_val) = id {
+                                    entry.0 = id_val.clone();
+                                }
+                                if let Some(ref name_val) = name {
+                                    entry.1 = name_val.clone();
+                                }
+                                entry.2.push_str(args_fragment);
+
+                                let _ = tx
+                                    .send(StreamEvent::ToolCallDelta {
+                                        index,
+                                        id,
+                                        name,
+                                        arguments: args_fragment.to_string(),
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If stream ended without [DONE], send what we have
+    if !full_content.is_empty() || !tool_calls_acc.is_empty() {
+        let tool_calls = if tool_calls_acc.is_empty() {
+            None
+        } else {
+            let mut calls: Vec<_> = tool_calls_acc.drain().collect();
+            calls.sort_by_key(|(idx, _)| *idx);
+            Some(
+                calls
+                    .into_iter()
+                    .map(|(_, (id, name, args))| super::ToolCall {
+                        id,
+                        call_type: Some("function".into()),
+                        function: Some(super::FunctionCall {
+                            name,
+                            arguments: args,
+                        }),
+                        name: None,
+                        arguments: None,
+                    })
+                    .collect(),
+            )
+        };
+
+        let resp = LLMResponse {
+            content: full_content,
+            tool_calls,
+            finish_reason,
+            usage: usage_info,
+        };
+        let _ = tx.send(StreamEvent::Done(resp)).await;
+    }
+
+    Ok(())
 }
 
 /// Parse an OpenAI-compatible chat completion response.
@@ -122,7 +378,10 @@ fn parse_response(body: &str) -> anyhow::Result<LLMResponse> {
 
     // Check for API error
     if let Some(err) = v.get("error") {
-        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error");
         anyhow::bail!("LLM API error: {}", msg);
     }
 
@@ -131,15 +390,18 @@ fn parse_response(body: &str) -> anyhow::Result<LLMResponse> {
         .and_then(|c| c.first())
         .ok_or_else(|| anyhow::anyhow!("No choices in LLM response"))?;
 
-    let message = choice.get("message")
+    let message = choice
+        .get("message")
         .ok_or_else(|| anyhow::anyhow!("No message in choice"))?;
 
-    let content = message.get("content")
+    let content = message
+        .get("content")
         .and_then(|c| c.as_str())
         .unwrap_or("")
         .to_string();
 
-    let finish_reason = choice.get("finish_reason")
+    let finish_reason = choice
+        .get("finish_reason")
         .and_then(|f| f.as_str())
         .unwrap_or("stop")
         .to_string();
@@ -148,12 +410,27 @@ fn parse_response(body: &str) -> anyhow::Result<LLMResponse> {
     let tool_calls = if let Some(tc_array) = message.get("tool_calls").and_then(|t| t.as_array()) {
         let mut calls = Vec::new();
         for tc in tc_array {
-            let id = tc.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-            let call_type = tc.get("type").and_then(|t| t.as_str()).map(|s| s.to_string());
+            let id = tc
+                .get("id")
+                .and_then(|i| i.as_str())
+                .unwrap_or("")
+                .to_string();
+            let call_type = tc
+                .get("type")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
 
             let function = if let Some(func) = tc.get("function") {
-                let name = func.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-                let arguments = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}").to_string();
+                let name = func
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = func
+                    .get("arguments")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("{}")
+                    .to_string();
                 Some(FunctionCall { name, arguments })
             } else {
                 None
@@ -167,7 +444,11 @@ fn parse_response(body: &str) -> anyhow::Result<LLMResponse> {
                 arguments: None,
             });
         }
-        if calls.is_empty() { None } else { Some(calls) }
+        if calls.is_empty() {
+            None
+        } else {
+            Some(calls)
+        }
     } else {
         None
     };
@@ -175,7 +456,10 @@ fn parse_response(body: &str) -> anyhow::Result<LLMResponse> {
     // Parse usage
     let usage = v.get("usage").map(|u| UsageInfo {
         prompt_tokens: u.get("prompt_tokens").and_then(|n| n.as_u64()).unwrap_or(0) as usize,
-        completion_tokens: u.get("completion_tokens").and_then(|n| n.as_u64()).unwrap_or(0) as usize,
+        completion_tokens: u
+            .get("completion_tokens")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0) as usize,
         total_tokens: u.get("total_tokens").and_then(|n| n.as_u64()).unwrap_or(0) as usize,
     });
 

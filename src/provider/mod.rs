@@ -1,7 +1,7 @@
 // QuectoClaw — LLM Provider abstraction
 
-pub mod http;
 pub mod factory;
+pub mod http;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -23,24 +23,51 @@ pub struct Message {
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), tool_calls: None, tool_call_id: None }
-    }
-    pub fn assistant_with_tool_calls(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: "assistant".into(),
             content: content.into(),
-            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+    pub fn assistant_with_tool_calls(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
             tool_call_id: None,
         }
     }
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: "tool".into(), content: content.into(), tool_calls: None, tool_call_id: Some(tool_call_id.into()) }
+        Self {
+            role: "tool".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
     }
 }
 
@@ -127,6 +154,28 @@ pub struct ToolFunctionDefinition {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming support
+// ---------------------------------------------------------------------------
+
+/// Events emitted during streaming.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// A text token delta.
+    Token(String),
+    /// A tool call delta (id, function_name, arguments_fragment).
+    ToolCallDelta {
+        index: usize,
+        id: Option<String>,
+        name: Option<String>,
+        arguments: String,
+    },
+    /// Stream is done, final response.
+    Done(LLMResponse),
+    /// An error occurred.
+    Error(String),
+}
+
+// ---------------------------------------------------------------------------
 // Provider trait
 // ---------------------------------------------------------------------------
 
@@ -139,6 +188,21 @@ pub trait LLMProvider: Send + Sync {
         model: &str,
         options: &HashMap<String, serde_json::Value>,
     ) -> anyhow::Result<LLMResponse>;
+
+    /// Streaming chat — sends events to the provided sender.
+    /// Default implementation falls back to non-streaming.
+    async fn chat_stream(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        model: &str,
+        options: &HashMap<String, serde_json::Value>,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> anyhow::Result<()> {
+        let response = self.chat(messages, tools, model, options).await?;
+        let _ = tx.send(StreamEvent::Done(response)).await;
+        Ok(())
+    }
 
     fn default_model(&self) -> &str;
 }

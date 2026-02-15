@@ -1,6 +1,7 @@
 // QuectoClaw — Agent loop (core orchestrator)
 
 pub mod context;
+pub mod gateway;
 pub mod memory;
 
 use crate::bus::{InboundMessage, MessageBus, OutboundMessage};
@@ -46,18 +47,26 @@ impl AgentLoop {
     }
 
     /// Process a direct one-shot message (CLI agent mode).
-    pub async fn process_direct(
+    pub async fn process_direct(&self, content: &str, session_key: &str) -> anyhow::Result<String> {
+        self.run_agent_loop(content, session_key, true, None).await
+    }
+
+    /// Process a direct message with streaming output.
+    /// The callback receives each token as it arrives.
+    pub async fn process_direct_streaming(
         &self,
         content: &str,
         session_key: &str,
+        token_tx: tokio::sync::mpsc::Sender<crate::provider::StreamEvent>,
     ) -> anyhow::Result<String> {
-        self.run_agent_loop(content, session_key, true).await
+        self.run_agent_loop(content, session_key, true, Some(token_tx))
+            .await
     }
 
     /// Process an inbound message from a channel.
     pub async fn process_message(&self, msg: InboundMessage) -> anyhow::Result<String> {
         let response = self
-            .run_agent_loop(&msg.content, &msg.session_key, true)
+            .run_agent_loop(&msg.content, &msg.session_key, true, None)
             .await?;
 
         // Send response back via bus
@@ -79,6 +88,7 @@ impl AgentLoop {
         user_message: &str,
         session_key: &str,
         use_history: bool,
+        stream_tx: Option<tokio::sync::mpsc::Sender<crate::provider::StreamEvent>>,
     ) -> anyhow::Result<String> {
         let max_iterations = self.config.agents.defaults.max_tool_iterations;
         let model = &self.config.agents.defaults.model;
@@ -134,10 +144,49 @@ impl AgentLoop {
                 "Running LLM iteration"
             );
 
-            let response = self
-                .provider
-                .chat(&messages, &tool_defs, model, &options)
-                .await?;
+            // Call LLM (streaming on last iteration or when no tool calls expected)
+            let response = if let Some(ref tx) = stream_tx {
+                // Use streaming — tokens will be sent via tx
+                let (done_tx, mut done_rx) = tokio::sync::mpsc::channel(256);
+                let tx_clone = tx.clone();
+
+                // Forward events and capture the Done response
+                let fwd_tx = done_tx.clone();
+                let provider = self.provider.clone();
+                let msgs = messages.clone();
+                let defs = tool_defs.clone();
+                let mdl = model.to_string();
+                let opts = options.clone();
+
+                tokio::spawn(async move {
+                    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(256);
+                    let _ = provider
+                        .chat_stream(&msgs, &defs, &mdl, &opts, event_tx)
+                        .await;
+
+                    while let Some(event) = event_rx.recv().await {
+                        match &event {
+                            crate::provider::StreamEvent::Done(resp) => {
+                                let _ = fwd_tx.send(resp.clone()).await;
+                                let _ = tx_clone.send(event).await;
+                                break;
+                            }
+                            _ => {
+                                let _ = tx_clone.send(event).await;
+                            }
+                        }
+                    }
+                });
+
+                done_rx
+                    .recv()
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("Stream ended without response"))?
+            } else {
+                self.provider
+                    .chat(&messages, &tool_defs, model, &options)
+                    .await?
+            };
 
             // Log usage
             if let Some(ref usage) = response.usage {
@@ -169,10 +218,8 @@ impl AgentLoop {
             );
 
             // Save assistant message with tool calls
-            let assistant_msg = Message::assistant_with_tool_calls(
-                &response.content,
-                tool_calls.clone(),
-            );
+            let assistant_msg =
+                Message::assistant_with_tool_calls(&response.content, tool_calls.clone());
             messages.push(assistant_msg.clone());
             self.sessions.add_message(session_key, assistant_msg).await;
 
@@ -191,7 +238,8 @@ impl AgentLoop {
         self.maybe_summarize(session_key).await;
 
         if final_content.is_empty() {
-            final_content = "(Agent reached maximum tool iterations without a final response)".into();
+            final_content =
+                "(Agent reached maximum tool iterations without a final response)".into();
         }
 
         Ok(final_content)
@@ -219,7 +267,10 @@ impl AgentLoop {
         while let Some(result) = set.join_next().await {
             match result {
                 Ok(tool_result) => results.push(tool_result),
-                Err(e) => results.push(crate::tool::ToolResult::error(format!("Tool execution panicked: {}", e))),
+                Err(e) => results.push(crate::tool::ToolResult::error(format!(
+                    "Tool execution panicked: {}",
+                    e
+                ))),
             }
         }
 
@@ -264,7 +315,12 @@ impl AgentLoop {
 
         let response = self
             .provider
-            .chat(&summary_messages, &[], &self.config.agents.defaults.model, &HashMap::new())
+            .chat(
+                &summary_messages,
+                &[],
+                &self.config.agents.defaults.model,
+                &HashMap::new(),
+            )
             .await?;
 
         self.sessions

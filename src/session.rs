@@ -78,7 +78,10 @@ impl SessionManager {
             match load_session(&path).await {
                 Ok(data) => {
                     let messages = data.messages.clone();
-                    self.cache.write().await.insert(session_key.to_string(), data);
+                    self.cache
+                        .write()
+                        .await
+                        .insert(session_key.to_string(), data);
                     return messages;
                 }
                 Err(e) => {
@@ -93,7 +96,10 @@ impl SessionManager {
     /// Get the summary for a session.
     pub async fn get_summary(&self, session_key: &str) -> String {
         let cache = self.cache.read().await;
-        cache.get(session_key).map(|s| s.summary.clone()).unwrap_or_default()
+        cache
+            .get(session_key)
+            .map(|s| s.summary.clone())
+            .unwrap_or_default()
     }
 
     /// Set the summary for a session.
@@ -179,7 +185,8 @@ mod tests {
         let mgr = SessionManager::new(tmp.path());
 
         mgr.add_message("test", Message::user("Hello")).await;
-        mgr.add_message("test", Message::assistant("Hi there")).await;
+        mgr.add_message("test", Message::assistant("Hi there"))
+            .await;
 
         // Small delay for async persistence
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

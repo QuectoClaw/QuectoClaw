@@ -471,9 +471,9 @@ impl Config {
     /// Resolve the workspace path, expanding `~` to home directory.
     pub fn workspace_path(&self) -> Result<PathBuf, ConfigError> {
         let ws = &self.agents.defaults.workspace;
-        if ws.starts_with('~') {
+        if let Some(stripped) = ws.strip_prefix('~') {
             let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
-            Ok(home.join(ws.strip_prefix("~/").unwrap_or(&ws[1..])))
+            Ok(home.join(ws.strip_prefix("~/").unwrap_or(stripped)))
         } else {
             Ok(PathBuf::from(ws))
         }
@@ -492,16 +492,56 @@ impl Config {
 
         // Auto-detect provider from model name
         let entries: Vec<(&str, &str, &str)> = vec![
-            ("claude", &self.providers.anthropic.api_key, &self.providers.anthropic.api_base),
-            ("gpt", &self.providers.openai.api_key, &self.providers.openai.api_base),
-            ("o1", &self.providers.openai.api_key, &self.providers.openai.api_base),
-            ("o3", &self.providers.openai.api_key, &self.providers.openai.api_base),
-            ("o4", &self.providers.openai.api_key, &self.providers.openai.api_base),
-            ("gemini", &self.providers.gemini.api_key, &self.providers.gemini.api_base),
-            ("glm", &self.providers.zhipu.api_key, &self.providers.zhipu.api_base),
-            ("llama", &self.providers.groq.api_key, &self.providers.groq.api_base),
-            ("mixtral", &self.providers.groq.api_key, &self.providers.groq.api_base),
-            ("moonshot", &self.providers.moonshot.api_key, &self.providers.moonshot.api_base),
+            (
+                "claude",
+                &self.providers.anthropic.api_key,
+                &self.providers.anthropic.api_base,
+            ),
+            (
+                "gpt",
+                &self.providers.openai.api_key,
+                &self.providers.openai.api_base,
+            ),
+            (
+                "o1",
+                &self.providers.openai.api_key,
+                &self.providers.openai.api_base,
+            ),
+            (
+                "o3",
+                &self.providers.openai.api_key,
+                &self.providers.openai.api_base,
+            ),
+            (
+                "o4",
+                &self.providers.openai.api_key,
+                &self.providers.openai.api_base,
+            ),
+            (
+                "gemini",
+                &self.providers.gemini.api_key,
+                &self.providers.gemini.api_base,
+            ),
+            (
+                "glm",
+                &self.providers.zhipu.api_key,
+                &self.providers.zhipu.api_base,
+            ),
+            (
+                "llama",
+                &self.providers.groq.api_key,
+                &self.providers.groq.api_base,
+            ),
+            (
+                "mixtral",
+                &self.providers.groq.api_key,
+                &self.providers.groq.api_base,
+            ),
+            (
+                "moonshot",
+                &self.providers.moonshot.api_key,
+                &self.providers.moonshot.api_base,
+            ),
         ];
 
         // Try model-name matching first
@@ -518,7 +558,11 @@ impl Config {
             } else {
                 self.providers.openrouter.api_base.clone()
             };
-            return Some((self.providers.openrouter.api_key.clone(), base, "openrouter".to_string()));
+            return Some((
+                self.providers.openrouter.api_key.clone(),
+                base,
+                "openrouter".to_string(),
+            ));
         }
 
         // Fall back: first non-empty key
@@ -534,7 +578,11 @@ impl Config {
 
         for (name, entry) in all_providers {
             if !entry.api_key.is_empty() {
-                return Some((entry.api_key.clone(), entry.api_base.clone(), name.to_string()));
+                return Some((
+                    entry.api_key.clone(),
+                    entry.api_base.clone(),
+                    name.to_string(),
+                ));
             }
         }
 

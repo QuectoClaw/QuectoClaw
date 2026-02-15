@@ -1,10 +1,13 @@
 // QuectoClaw — Channel trait and base channel
 
+pub mod discord;
+pub mod slack;
+pub mod telegram;
+
 use crate::bus::{InboundMessage, MessageBus, OutboundMessage};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-
 
 /// Channel is the interface that all chat channels must implement.
 #[async_trait]
@@ -98,6 +101,14 @@ impl BaseChannel {
 
     pub fn name(&self) -> &str {
         &self.channel_name
+    }
+
+    pub fn allow_list(&self) -> &[String] {
+        &self.allow_list
+    }
+
+    pub fn bus(&self) -> &Arc<MessageBus> {
+        &self.bus
     }
 }
 

@@ -60,6 +60,32 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Post-Task Verification (Mandatory)
+
+**After every task, run these steps in order. Do NOT consider a task complete until all pass.**
+
+1. **Format** — Ensure consistent code style:
+   ```bash
+   cargo fmt
+   ```
+
+2. **Lint** — Catch common mistakes and enforce best practices:
+   ```bash
+   cargo clippy -- -D warnings
+   ```
+
+3. **Test** — Verify nothing is broken:
+   ```bash
+   cargo test
+   ```
+
+4. **Commit** — If all checks pass, commit with a clear message:
+   ```bash
+   git add -A && git commit -m "<concise description of what changed>"
+   ```
+
+If any step fails, fix the issue and re-run from step 1.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

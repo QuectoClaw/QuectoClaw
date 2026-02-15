@@ -26,9 +26,7 @@ fn validate_path(path: &str, workspace: &str, restrict: bool) -> Result<PathBuf,
     };
 
     // Normalize the path (resolve . and ..)
-    let abs_path = abs_path
-        .canonicalize()
-        .unwrap_or_else(|_| abs_path.clone());
+    let abs_path = abs_path.canonicalize().unwrap_or_else(|_| abs_path.clone());
 
     if restrict && !abs_path.starts_with(&abs_workspace) {
         return Err("access denied: path is outside the workspace".into());
@@ -48,14 +46,21 @@ pub struct ReadFileTool {
 
 impl ReadFileTool {
     pub fn new(workspace: String, restrict: bool) -> Self {
-        Self { workspace, restrict }
+        Self {
+            workspace,
+            restrict,
+        }
     }
 }
 
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> &str { "read_file" }
-    fn description(&self) -> &str { "Read the contents of a file" }
+    fn name(&self) -> &str {
+        "read_file"
+    }
+    fn description(&self) -> &str {
+        "Read the contents of a file"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -96,14 +101,21 @@ pub struct WriteFileTool {
 
 impl WriteFileTool {
     pub fn new(workspace: String, restrict: bool) -> Self {
-        Self { workspace, restrict }
+        Self {
+            workspace,
+            restrict,
+        }
     }
 }
 
 #[async_trait]
 impl Tool for WriteFileTool {
-    fn name(&self) -> &str { "write_file" }
-    fn description(&self) -> &str { "Write content to a file (creates parent directories)" }
+    fn name(&self) -> &str {
+        "write_file"
+    }
+    fn description(&self) -> &str {
+        "Write content to a file (creates parent directories)"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -156,14 +168,21 @@ pub struct ListDirTool {
 
 impl ListDirTool {
     pub fn new(workspace: String, restrict: bool) -> Self {
-        Self { workspace, restrict }
+        Self {
+            workspace,
+            restrict,
+        }
     }
 }
 
 #[async_trait]
 impl Tool for ListDirTool {
-    fn name(&self) -> &str { "list_dir" }
-    fn description(&self) -> &str { "List files and directories in a path" }
+    fn name(&self) -> &str {
+        "list_dir"
+    }
+    fn description(&self) -> &str {
+        "List files and directories in a path"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -176,10 +195,7 @@ impl Tool for ListDirTool {
     }
 
     async fn execute(&self, args: HashMap<String, Value>) -> ToolResult {
-        let path = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let resolved = match validate_path(path, &self.workspace, self.restrict) {
             Ok(p) => p,
@@ -219,14 +235,21 @@ pub struct EditFileTool {
 
 impl EditFileTool {
     pub fn new(workspace: String, restrict: bool) -> Self {
-        Self { workspace, restrict }
+        Self {
+            workspace,
+            restrict,
+        }
     }
 }
 
 #[async_trait]
 impl Tool for EditFileTool {
-    fn name(&self) -> &str { "edit_file" }
-    fn description(&self) -> &str { "Edit a file by replacing old_text with new_text" }
+    fn name(&self) -> &str {
+        "edit_file"
+    }
+    fn description(&self) -> &str {
+        "Edit a file by replacing old_text with new_text"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -288,14 +311,21 @@ pub struct AppendFileTool {
 
 impl AppendFileTool {
     pub fn new(workspace: String, restrict: bool) -> Self {
-        Self { workspace, restrict }
+        Self {
+            workspace,
+            restrict,
+        }
     }
 }
 
 #[async_trait]
 impl Tool for AppendFileTool {
-    fn name(&self) -> &str { "append_file" }
-    fn description(&self) -> &str { "Append content to the end of a file" }
+    fn name(&self) -> &str {
+        "append_file"
+    }
+    fn description(&self) -> &str {
+        "Append content to the end of a file"
+    }
 
     fn parameters(&self) -> Value {
         json!({

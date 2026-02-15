@@ -47,11 +47,18 @@ impl SearchProvider for BraveSearchProvider {
         let body: Value = resp.json().await?;
 
         let mut result = String::new();
-        if let Some(results) = body.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
+        if let Some(results) = body
+            .get("web")
+            .and_then(|w| w.get("results"))
+            .and_then(|r| r.as_array())
+        {
             for (i, item) in results.iter().enumerate() {
                 let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("");
                 let url = item.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                let desc = item.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                let desc = item
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
                 result.push_str(&format!("{}. {} - {}\n   {}\n\n", i + 1, title, url, desc));
             }
         }
@@ -91,16 +98,31 @@ fn extract_ddg_results(html: &str, count: usize) -> anyhow::Result<String> {
     let url_re = Regex::new(r#"class="result__url"[^>]*>([^<]+)</a>"#)?;
     let snippet_re = Regex::new(r#"class="result__snippet"[^>]*>([^<]*(?:<[^>]*>[^<]*)*)</a>"#)?;
 
-    let titles: Vec<&str> = title_re.captures_iter(html).map(|c| c.get(1).unwrap().as_str()).collect();
-    let urls: Vec<&str> = url_re.captures_iter(html).map(|c| c.get(1).unwrap().as_str()).collect();
-    let snippets: Vec<&str> = snippet_re.captures_iter(html).map(|c| c.get(1).unwrap().as_str()).collect();
+    let titles: Vec<&str> = title_re
+        .captures_iter(html)
+        .map(|c| c.get(1).unwrap().as_str())
+        .collect();
+    let urls: Vec<&str> = url_re
+        .captures_iter(html)
+        .map(|c| c.get(1).unwrap().as_str())
+        .collect();
+    let snippets: Vec<&str> = snippet_re
+        .captures_iter(html)
+        .map(|c| c.get(1).unwrap().as_str())
+        .collect();
 
     let mut result = String::new();
-    for i in 0..count.min(titles.len()) {
+    for (i, title) in titles.iter().enumerate().take(count.min(titles.len())) {
         let url = urls.get(i).unwrap_or(&"");
         let snippet = snippets.get(i).unwrap_or(&"");
         let clean = strip_tags(snippet);
-        result.push_str(&format!("{}. {} - {}\n   {}\n\n", i + 1, titles[i], url.trim(), clean));
+        result.push_str(&format!(
+            "{}. {} - {}\n   {}\n\n",
+            i + 1,
+            title,
+            url.trim(),
+            clean
+        ));
     }
 
     if result.is_empty() {
@@ -126,19 +148,27 @@ pub struct WebSearchTool {
 
 impl WebSearchTool {
     pub fn new(brave_api_key: Option<String>, max_results: usize) -> Self {
-        let provider: Box<dyn SearchProvider> = if let Some(key) = brave_api_key.filter(|k| !k.is_empty()) {
-            Box::new(BraveSearchProvider::new(key))
-        } else {
-            Box::new(DuckDuckGoSearchProvider)
-        };
-        Self { provider, max_results }
+        let provider: Box<dyn SearchProvider> =
+            if let Some(key) = brave_api_key.filter(|k| !k.is_empty()) {
+                Box::new(BraveSearchProvider::new(key))
+            } else {
+                Box::new(DuckDuckGoSearchProvider)
+            };
+        Self {
+            provider,
+            max_results,
+        }
     }
 }
 
 #[async_trait]
 impl Tool for WebSearchTool {
-    fn name(&self) -> &str { "web_search" }
-    fn description(&self) -> &str { "Search the web for information" }
+    fn name(&self) -> &str {
+        "web_search"
+    }
+    fn description(&self) -> &str {
+        "Search the web for information"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -185,8 +215,12 @@ impl WebFetchTool {
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    fn name(&self) -> &str { "web_fetch" }
-    fn description(&self) -> &str { "Fetch the content of a web page and extract its text" }
+    fn name(&self) -> &str {
+        "web_fetch"
+    }
+    fn description(&self) -> &str {
+        "Fetch the content of a web page and extract its text"
+    }
 
     fn parameters(&self) -> Value {
         json!({
@@ -252,8 +286,10 @@ impl Tool for WebFetchTool {
 /// Simple HTML to text extraction (strips tags, collapse whitespace).
 fn extract_text(html: &str) -> String {
     // Remove script and style elements
-    let script_re = Regex::new(r"(?si)<(script|style)[^>]*>.*?</\1>").unwrap();
+    let script_re = Regex::new(r"(?si)<script[^>]*>.*?</script>").unwrap();
+    let style_re = Regex::new(r"(?si)<style[^>]*>.*?</style>").unwrap();
     let cleaned = script_re.replace_all(html, "");
+    let cleaned = style_re.replace_all(&cleaned, "");
 
     // Strip all HTML tags
     let text = strip_tags(&cleaned);

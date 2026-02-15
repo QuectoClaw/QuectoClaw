@@ -61,7 +61,9 @@ impl ExecTool {
             for raw in path_re.find_iter(command) {
                 if let Ok(abs) = std::path::Path::new(raw.as_str()).canonicalize() {
                     if !abs.starts_with(&cwd_path) {
-                        return Some("Command blocked by safety guard (path outside working dir)".into());
+                        return Some(
+                            "Command blocked by safety guard (path outside working dir)".into(),
+                        );
                     }
                 }
             }
@@ -182,7 +184,9 @@ mod tests {
     #[test]
     fn test_guard_path_traversal() {
         let tool = ExecTool::new("/tmp".into(), true);
-        assert!(tool.guard_command("cat ../../../etc/passwd", "/tmp").is_some());
+        assert!(tool
+            .guard_command("cat ../../../etc/passwd", "/tmp")
+            .is_some());
     }
 
     #[tokio::test]

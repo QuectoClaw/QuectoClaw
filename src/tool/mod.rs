@@ -2,6 +2,7 @@
 
 pub mod exec;
 pub mod filesystem;
+pub mod subagent;
 pub mod web;
 
 use async_trait::async_trait;
@@ -29,23 +30,43 @@ pub struct ToolResult {
 impl ToolResult {
     pub fn success(content: impl Into<String>) -> Self {
         let c = content.into();
-        Self { for_llm: c.clone(), for_user: c, is_error: false, is_async: false }
+        Self {
+            for_llm: c.clone(),
+            for_user: c,
+            is_error: false,
+            is_async: false,
+        }
     }
 
     pub fn error(content: impl Into<String>) -> Self {
         let c = content.into();
-        Self { for_llm: c.clone(), for_user: c, is_error: true, is_async: false }
+        Self {
+            for_llm: c.clone(),
+            for_user: c,
+            is_error: true,
+            is_async: false,
+        }
     }
 
     /// Result shown to LLM but silent to user
     pub fn silent(content: impl Into<String>) -> Self {
         let c = content.into();
-        Self { for_llm: c, for_user: String::new(), is_error: false, is_async: false }
+        Self {
+            for_llm: c,
+            for_user: String::new(),
+            is_error: false,
+            is_async: false,
+        }
     }
 
     pub fn async_started(content: impl Into<String>) -> Self {
         let c = content.into();
-        Self { for_llm: c.clone(), for_user: c, is_error: false, is_async: true }
+        Self {
+            for_llm: c.clone(),
+            for_user: c,
+            is_error: false,
+            is_async: true,
+        }
     }
 }
 

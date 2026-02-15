@@ -28,12 +28,7 @@ pub fn create_provider(cfg: &Config) -> anyhow::Result<Box<dyn LLMProvider>> {
         None
     };
 
-    let provider = HTTPProvider::new(
-        api_key,
-        api_base,
-        proxy,
-        cfg.agents.defaults.model.clone(),
-    )?;
+    let provider = HTTPProvider::new(api_key, api_base, proxy, cfg.agents.defaults.model.clone())?;
 
     Ok(Box::new(provider))
 }

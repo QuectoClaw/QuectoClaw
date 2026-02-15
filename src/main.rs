@@ -9,6 +9,7 @@ use quectoclaw::config::Config;
 use quectoclaw::provider::factory::create_provider;
 use quectoclaw::tool::exec::ExecTool;
 use quectoclaw::tool::filesystem::*;
+use quectoclaw::tool::subagent::SubagentTool;
 use quectoclaw::tool::web::{WebFetchTool, WebSearchTool};
 use quectoclaw::tool::ToolRegistry;
 use std::path::PathBuf;
@@ -22,7 +23,11 @@ const LOGO: &str = "🦀";
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "quectoclaw", about = "QuectoClaw — Ultra-efficient AI assistant in Rust", version)]
+#[command(
+    name = "quectoclaw",
+    about = "QuectoClaw — Ultra-efficient AI assistant in Rust",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -38,6 +43,12 @@ enum Commands {
         /// Session key for conversation continuity
         #[arg(short, long, default_value = "default")]
         session: String,
+        /// Config file path
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+    /// Run the multi-channel gateway service
+    Gateway {
         /// Config file path
         #[arg(short, long)]
         config: Option<String>,
@@ -61,8 +72,15 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Agent { message, session, config }) => {
+        Some(Commands::Agent {
+            message,
+            session,
+            config,
+        }) => {
             agent_cmd(message, session, config).await;
+        }
+        Some(Commands::Gateway { config }) => {
+            gateway_cmd(config).await;
         }
         Some(Commands::Onboard) => {
             onboard_cmd().await;
@@ -110,10 +128,16 @@ async fn agent_cmd(message: Option<String>, session: String, config_path: Option
     let restrict = cfg.agents.defaults.restrict_to_workspace;
 
     // Build tool registry
-    let tools = create_tool_registry(&ws_str, restrict, &cfg);
+    let tools = create_tool_registry(&ws_str, restrict, &cfg).await;
 
     let bus = Arc::new(MessageBus::new());
-    let agent = AgentLoop::new(cfg, provider, tools, bus);
+    let agent = Arc::new(AgentLoop::new(cfg, provider, tools.clone(), bus));
+
+    // Register subagent tool (circular dependency handled via Arc)
+    let agent_clone = agent.clone();
+    tools
+        .register(Arc::new(SubagentTool::new(agent_clone)))
+        .await;
 
     tracing::info!(
         workspace = %ws_str,
@@ -140,8 +164,10 @@ async fn agent_cmd(message: Option<String>, session: String, config_path: Option
     }
 }
 
-/// Interactive readline-based chat mode.
-async fn interactive_mode(agent: AgentLoop, session: &str) {
+/// Interactive readline-based chat mode with streaming output.
+async fn interactive_mode(agent: Arc<AgentLoop>, session: &str) {
+    use std::io::Write;
+
     println!(
         "{} QuectoClaw v{} — Ultra-efficient AI Assistant",
         LOGO, VERSION
@@ -152,7 +178,6 @@ async fn interactive_mode(agent: AgentLoop, session: &str) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to initialize readline: {}", e);
-            // Fall back to simple stdin mode
             simple_interactive_mode(agent, session).await;
             return;
         }
@@ -172,13 +197,51 @@ async fn interactive_mode(agent: AgentLoop, session: &str) {
 
                 let _ = rl.add_history_entry(trimmed);
 
-                match agent.process_direct(trimmed, session).await {
-                    Ok(response) => {
-                        println!("\n{}\n", response);
+                // Stream response tokens
+                let (tx, mut rx) =
+                    tokio::sync::mpsc::channel::<quectoclaw::provider::StreamEvent>(256);
+
+                let agent_clone = agent.clone();
+                let msg = trimmed.to_string();
+                let sess = session.to_string();
+
+                let handle = tokio::spawn(async move {
+                    agent_clone.process_direct_streaming(&msg, &sess, tx).await
+                });
+
+                println!();
+                let mut printed_content = false;
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        quectoclaw::provider::StreamEvent::Token(token) => {
+                            print!("{}", token);
+                            std::io::stdout().flush().ok();
+                            printed_content = true;
+                        }
+                        quectoclaw::provider::StreamEvent::ToolCallDelta { name, .. } => {
+                            if let Some(n) = name {
+                                print!("\n⚙️  Calling {}...", n);
+                                std::io::stdout().flush().ok();
+                            }
+                        }
+                        quectoclaw::provider::StreamEvent::Done(_) => {
+                            break;
+                        }
+                        quectoclaw::provider::StreamEvent::Error(e) => {
+                            eprintln!("\n{} Stream error: {}", LOGO, e);
+                            break;
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("\n{} Error: {}\n", LOGO, e);
-                    }
+                }
+                if printed_content {
+                    println!("\n");
+                }
+
+                // Wait for the agent loop to finish (handles tool iterations)
+                match handle.await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => eprintln!("{} Error: {}\n", LOGO, e),
+                    Err(e) => eprintln!("{} Task error: {}\n", LOGO, e),
                 }
             }
             Err(rustyline::error::ReadlineError::Eof) => {
@@ -197,7 +260,7 @@ async fn interactive_mode(agent: AgentLoop, session: &str) {
 }
 
 /// Simple fallback interactive mode using stdin.
-async fn simple_interactive_mode(agent: AgentLoop, session: &str) {
+async fn simple_interactive_mode(agent: Arc<AgentLoop>, session: &str) {
     use std::io::BufRead;
 
     println!("(Simple mode — type your message and press Enter)\n");
@@ -207,8 +270,12 @@ async fn simple_interactive_mode(agent: AgentLoop, session: &str) {
         match line {
             Ok(input) => {
                 let trimmed = input.trim().to_string();
-                if trimmed.is_empty() { continue; }
-                if trimmed == "exit" || trimmed == "quit" { break; }
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed == "exit" || trimmed == "quit" {
+                    break;
+                }
 
                 match agent.process_direct(&trimmed, session).await {
                     Ok(response) => println!("\n{}\n", response),
@@ -225,7 +292,10 @@ async fn simple_interactive_mode(agent: AgentLoop, session: &str) {
 // ---------------------------------------------------------------------------
 
 async fn onboard_cmd() {
-    println!("{} QuectoClaw Onboard — Setting up your AI assistant\n", LOGO);
+    println!(
+        "{} QuectoClaw Onboard — Setting up your AI assistant\n",
+        LOGO
+    );
 
     let home = dirs::home_dir().expect("Could not find home directory");
     let config_dir = home.join(".quectoclaw");
@@ -341,13 +411,21 @@ async fn status_cmd() {
     }
 
     // Tool counts
-    println!("  Tools:     6 built-in (exec, read_file, write_file, list_dir, edit_file, web_search)");
+    println!(
+        "  Tools:     6 built-in (exec, read_file, write_file, list_dir, edit_file, web_search)"
+    );
 
     // Channels
     let mut channels = Vec::new();
-    if cfg.channels.telegram.enabled { channels.push("telegram"); }
-    if cfg.channels.discord.enabled { channels.push("discord"); }
-    if cfg.channels.slack.enabled { channels.push("slack"); }
+    if cfg.channels.telegram.enabled {
+        channels.push("telegram");
+    }
+    if cfg.channels.discord.enabled {
+        channels.push("discord");
+    }
+    if cfg.channels.slack.enabled {
+        channels.push("slack");
+    }
     if channels.is_empty() {
         println!("  Channels:  None enabled");
     } else {
@@ -372,11 +450,10 @@ fn load_config(path: Option<&str>) -> Config {
     })
 }
 
-fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> ToolRegistry {
+async fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> ToolRegistry {
     let registry = ToolRegistry::new();
 
-    // We need to register tools synchronously outside of async context,
-    // so we use tokio::task::block_in_place or just build the vec and register in a block.
+    // We can't register tools inside the registry synchronously, so we build them here.
     let tools: Vec<Arc<dyn quectoclaw::tool::Tool>> = vec![
         Arc::new(ExecTool::new(workspace.to_string(), restrict)),
         Arc::new(ReadFileTool::new(workspace.to_string(), restrict)),
@@ -391,13 +468,57 @@ fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> ToolRe
         Arc::new(WebFetchTool::new(50_000)),
     ];
 
-    // Use a blocking registration
-    let rt = tokio::runtime::Handle::current();
-    rt.block_on(async {
-        for tool in tools {
-            registry.register(tool).await;
-        }
-    });
+    for tool in tools {
+        registry.register(tool).await;
+    }
 
     registry
+}
+
+// ---------------------------------------------------------------------------
+// Gateway command
+// ---------------------------------------------------------------------------
+
+async fn gateway_cmd(config_path: Option<String>) {
+    let cfg = load_config(config_path.as_deref());
+
+    let provider = match create_provider(&cfg) {
+        Ok(p) => Arc::from(p),
+        Err(e) => {
+            eprintln!("{} Error: {}", LOGO, e);
+            std::process::exit(1);
+        }
+    };
+
+    let workspace = cfg
+        .workspace_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/quectoclaw"));
+
+    let ws_str = workspace.to_string_lossy().to_string();
+    let restrict = cfg.agents.defaults.restrict_to_workspace;
+
+    let tools = create_tool_registry(&ws_str, restrict, &cfg).await;
+    let bus = Arc::new(MessageBus::new());
+
+    let agent_loop = Arc::new(AgentLoop::new(
+        cfg.clone(),
+        provider,
+        tools.clone(),
+        bus.clone(),
+    ));
+
+    // Register subagent tool
+    let agent_clone = agent_loop.clone();
+    tools
+        .register(Arc::new(SubagentTool::new(agent_clone)))
+        .await;
+
+    let gateway = quectoclaw::agent::gateway::Gateway::new(cfg, agent_loop, bus);
+
+    println!("{} QuectoClaw Gateway starting...", LOGO);
+
+    if let Err(e) = gateway.run().await {
+        eprintln!("{} Gateway error: {}", LOGO, e);
+        std::process::exit(1);
+    }
 }

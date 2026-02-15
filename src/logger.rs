@@ -9,8 +9,8 @@ use tracing_subscriber::{fmt, EnvFilter};
 ///   QUECTOCLAW_LOG=debug
 ///   QUECTOCLAW_LOG=quectoclaw::tool=trace,info
 pub fn init() {
-    let filter = EnvFilter::try_from_env("QUECTOCLAW_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter =
+        EnvFilter::try_from_env("QUECTOCLAW_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
 
     fmt()
         .with_env_filter(filter)

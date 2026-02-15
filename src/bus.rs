@@ -1,9 +1,9 @@
 // QuectoClaw — Message bus (async channels for inter-component communication)
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,10 @@ impl MessageBus {
 
     /// Register a channel-specific handler for outbound messages.
     pub async fn register_handler(&self, channel: &str, sender: mpsc::Sender<OutboundMessage>) {
-        self.handlers.write().await.insert(channel.to_string(), sender);
+        self.handlers
+            .write()
+            .await
+            .insert(channel.to_string(), sender);
     }
 
     /// Get the inbound sender (for channels to publish messages).

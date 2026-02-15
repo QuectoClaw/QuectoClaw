@@ -47,6 +47,7 @@ teloxide = { version = "0.13", features = ["macros"], optional = true }
 
 # Discord bot
 serenity = { version = "0.12", features = ["client", "gateway", "model"], optional = true }
+futures-util = "0.3.32"
 
 [features]
 default = []
