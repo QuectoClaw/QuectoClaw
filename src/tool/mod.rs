@@ -2,6 +2,7 @@
 
 pub mod exec;
 pub mod filesystem;
+pub mod plugin;
 pub mod subagent;
 pub mod web;
 

@@ -130,6 +130,40 @@ impl SessionManager {
         let _ = tokio::fs::remove_file(path).await;
     }
 
+    /// Fork a session: clone all messages and summary into a new session key.
+    pub async fn fork_session(&self, source_key: &str, target_key: &str) -> bool {
+        let messages = self.get_messages(source_key).await;
+        if messages.is_empty() {
+            return false;
+        }
+
+        let summary = self.get_summary(source_key).await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let new_session = SessionData {
+            messages,
+            summary,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+
+        // Save to cache and disk
+        let data = new_session.clone();
+        self.cache
+            .write()
+            .await
+            .insert(target_key.to_string(), new_session);
+
+        let path = self.session_path(target_key);
+        let key_owned = target_key.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = save_session(&path, &data).await {
+                tracing::error!(session = %key_owned, "Failed to save forked session: {}", e);
+            }
+        });
+
+        true
+    }
+
     /// List all session keys.
     pub async fn list_sessions(&self) -> Vec<String> {
         let mut sessions = Vec::new();

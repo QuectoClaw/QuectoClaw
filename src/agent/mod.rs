@@ -365,4 +365,9 @@ impl AgentLoop {
     pub fn workspace(&self) -> &str {
         &self.workspace
     }
+
+    /// Fork a session into a new session key.
+    pub async fn fork_session(&self, source_key: &str, target_key: &str) -> bool {
+        self.sessions.fork_session(source_key, target_key).await
+    }
 }

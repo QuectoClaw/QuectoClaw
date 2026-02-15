@@ -197,6 +197,52 @@ async fn interactive_mode(agent: Arc<AgentLoop>, session: &str) {
 
                 let _ = rl.add_history_entry(trimmed);
 
+                // Handle slash commands
+                if trimmed.starts_with('/') {
+                    let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+                    match parts[0] {
+                        "/fork" => {
+                            let new_name =
+                                parts.get(1).map(|s| s.to_string()).unwrap_or_else(|| {
+                                    format!("{}-fork-{}", session, chrono::Utc::now().timestamp())
+                                });
+                            if agent.fork_session(session, &new_name).await {
+                                println!("✂️  Forked session to: {}", new_name);
+                                println!("   (Restart with --session {} to use it)\n", new_name);
+                            } else {
+                                println!("⚠️  Nothing to fork — session is empty.\n");
+                            }
+                            continue;
+                        }
+                        "/clear" => {
+                            agent
+                                .fork_session(
+                                    session,
+                                    &format!(
+                                        "{}-backup-{}",
+                                        session,
+                                        chrono::Utc::now().timestamp()
+                                    ),
+                                )
+                                .await;
+                            println!("🗑️  Session cleared. (Backup saved)\n");
+                            continue;
+                        }
+                        "/help" => {
+                            println!("Commands:");
+                            println!("  /fork [name]  — Branch this conversation");
+                            println!("  /clear        — Clear session (auto-backs up)");
+                            println!("  /help         — Show this help");
+                            println!("  exit          — Quit\n");
+                            continue;
+                        }
+                        _ => {
+                            println!("Unknown command: {} (try /help)\n", parts[0]);
+                            continue;
+                        }
+                    }
+                }
+
                 // Stream response tokens
                 let (tx, mut rx) =
                     tokio::sync::mpsc::channel::<quectoclaw::provider::StreamEvent>(256);
@@ -470,6 +516,14 @@ async fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> 
 
     for tool in tools {
         registry.register(tool).await;
+    }
+
+    // Load plugins from workspace/plugins/ directory
+    let plugins_dir = std::path::Path::new(workspace).join("plugins");
+    let plugins = quectoclaw::tool::plugin::load_plugins(&plugins_dir).await;
+    if !plugins.is_empty() {
+        tracing::info!(count = plugins.len(), "Loading plugins");
+        quectoclaw::tool::plugin::register_plugins(&registry, plugins).await;
     }
 
     registry
