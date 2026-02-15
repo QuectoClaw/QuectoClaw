@@ -1,0 +1,403 @@
+// QuectoClaw — Ultra-efficient AI assistant in Rust
+// Inspired by PicoClaw: https://github.com/sipeed/picoclaw
+// License: Apache-2.0
+
+use clap::{Parser, Subcommand};
+use quectoclaw::agent::AgentLoop;
+use quectoclaw::bus::MessageBus;
+use quectoclaw::config::Config;
+use quectoclaw::provider::factory::create_provider;
+use quectoclaw::tool::exec::ExecTool;
+use quectoclaw::tool::filesystem::*;
+use quectoclaw::tool::web::{WebFetchTool, WebSearchTool};
+use quectoclaw::tool::ToolRegistry;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const LOGO: &str = "🦀";
+
+// ---------------------------------------------------------------------------
+// CLI definition
+// ---------------------------------------------------------------------------
+
+#[derive(Parser)]
+#[command(name = "quectoclaw", about = "QuectoClaw — Ultra-efficient AI assistant in Rust", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the agent (one-shot or interactive)
+    Agent {
+        /// One-shot message to process
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Session key for conversation continuity
+        #[arg(short, long, default_value = "default")]
+        session: String,
+        /// Config file path
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+    /// Initialize workspace and config
+    Onboard,
+    /// Show version information
+    Version,
+    /// Show status of configuration and workspace
+    Status,
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+#[tokio::main]
+async fn main() {
+    quectoclaw::logger::init();
+
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Agent { message, session, config }) => {
+            agent_cmd(message, session, config).await;
+        }
+        Some(Commands::Onboard) => {
+            onboard_cmd().await;
+        }
+        Some(Commands::Version) => {
+            version_cmd();
+        }
+        Some(Commands::Status) => {
+            status_cmd().await;
+        }
+        None => {
+            // Default: run in interactive agent mode
+            agent_cmd(None, "default".into(), None).await;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent command
+// ---------------------------------------------------------------------------
+
+async fn agent_cmd(message: Option<String>, session: String, config_path: Option<String>) {
+    let cfg = load_config(config_path.as_deref());
+
+    let provider = match create_provider(&cfg) {
+        Ok(p) => Arc::from(p),
+        Err(e) => {
+            eprintln!("{} Error: {}", LOGO, e);
+            eprintln!("\nRun `quectoclaw onboard` to set up your configuration.");
+            std::process::exit(1);
+        }
+    };
+
+    let workspace = cfg
+        .workspace_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/quectoclaw"));
+
+    // Ensure workspace exists
+    if let Err(e) = std::fs::create_dir_all(&workspace) {
+        eprintln!("Failed to create workspace: {}", e);
+        std::process::exit(1);
+    }
+
+    let ws_str = workspace.to_string_lossy().to_string();
+    let restrict = cfg.agents.defaults.restrict_to_workspace;
+
+    // Build tool registry
+    let tools = create_tool_registry(&ws_str, restrict, &cfg);
+
+    let bus = Arc::new(MessageBus::new());
+    let agent = AgentLoop::new(cfg, provider, tools, bus);
+
+    tracing::info!(
+        workspace = %ws_str,
+        "QuectoClaw agent starting"
+    );
+
+    match message {
+        Some(msg) => {
+            // One-shot mode
+            match agent.process_direct(&msg, &session).await {
+                Ok(response) => {
+                    println!("{}", response);
+                }
+                Err(e) => {
+                    eprintln!("{} Error: {}", LOGO, e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            // Interactive mode
+            interactive_mode(agent, &session).await;
+        }
+    }
+}
+
+/// Interactive readline-based chat mode.
+async fn interactive_mode(agent: AgentLoop, session: &str) {
+    println!(
+        "{} QuectoClaw v{} — Ultra-efficient AI Assistant",
+        LOGO, VERSION
+    );
+    println!("Type your message and press Enter. Type 'exit' or Ctrl+D to quit.\n");
+
+    let mut rl = match rustyline::DefaultEditor::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to initialize readline: {}", e);
+            // Fall back to simple stdin mode
+            simple_interactive_mode(agent, session).await;
+            return;
+        }
+    };
+
+    loop {
+        match rl.readline(&format!("{} > ", LOGO)) {
+            Ok(line) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed == "exit" || trimmed == "quit" {
+                    println!("Goodbye! 👋");
+                    break;
+                }
+
+                let _ = rl.add_history_entry(trimmed);
+
+                match agent.process_direct(trimmed, session).await {
+                    Ok(response) => {
+                        println!("\n{}\n", response);
+                    }
+                    Err(e) => {
+                        eprintln!("\n{} Error: {}\n", LOGO, e);
+                    }
+                }
+            }
+            Err(rustyline::error::ReadlineError::Eof) => {
+                println!("\nGoodbye! 👋");
+                break;
+            }
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                println!("\nUse 'exit' to quit or Ctrl+D to exit.");
+            }
+            Err(e) => {
+                eprintln!("Readline error: {}", e);
+                break;
+            }
+        }
+    }
+}
+
+/// Simple fallback interactive mode using stdin.
+async fn simple_interactive_mode(agent: AgentLoop, session: &str) {
+    use std::io::BufRead;
+
+    println!("(Simple mode — type your message and press Enter)\n");
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(input) => {
+                let trimmed = input.trim().to_string();
+                if trimmed.is_empty() { continue; }
+                if trimmed == "exit" || trimmed == "quit" { break; }
+
+                match agent.process_direct(&trimmed, session).await {
+                    Ok(response) => println!("\n{}\n", response),
+                    Err(e) => eprintln!("\n{} Error: {}\n", LOGO, e),
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Onboard command
+// ---------------------------------------------------------------------------
+
+async fn onboard_cmd() {
+    println!("{} QuectoClaw Onboard — Setting up your AI assistant\n", LOGO);
+
+    let home = dirs::home_dir().expect("Could not find home directory");
+    let config_dir = home.join(".quectoclaw");
+    let workspace_dir = config_dir.join("workspace");
+    let config_path = config_dir.join("config.json");
+
+    // Create directories
+    for dir in &[
+        &config_dir,
+        &workspace_dir,
+        &workspace_dir.join("sessions"),
+        &workspace_dir.join("memory"),
+        &workspace_dir.join("state"),
+        &workspace_dir.join("skills"),
+    ] {
+        std::fs::create_dir_all(dir).expect("Failed to create directory");
+    }
+
+    // Write default config if it doesn't exist
+    if !config_path.exists() {
+        let default_config = serde_json::json!({
+            "agents": {
+                "defaults": {
+                    "workspace": "~/.quectoclaw/workspace",
+                    "restrict_to_workspace": true,
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 8192,
+                    "temperature": 0.7,
+                    "max_tool_iterations": 20
+                }
+            },
+            "providers": {
+                "openai": { "api_key": "", "api_base": "" },
+                "openrouter": { "api_key": "", "api_base": "" },
+                "anthropic": { "api_key": "", "api_base": "" },
+                "gemini": { "api_key": "", "api_base": "" }
+            },
+            "tools": {
+                "web": { "search": { "api_key": "", "max_results": 5 } }
+            },
+            "heartbeat": { "enabled": true, "interval": 30 }
+        });
+
+        let content = serde_json::to_string_pretty(&default_config).unwrap();
+        std::fs::write(&config_path, content).expect("Failed to write config");
+        println!("  ✅ Config created at {}", config_path.display());
+    } else {
+        println!("  ⏭️  Config already exists at {}", config_path.display());
+    }
+
+    // Write workspace templates
+    let templates = [
+        ("IDENTITY.md", "# Identity\nYou are QuectoClaw, an ultra-efficient AI assistant built in Rust.\nYou are fast, precise, and helpful.\n"),
+        ("SOUL.md", "# Soul\nYou communicate clearly and concisely.\nYou prefer practical solutions over theoretical ones.\nYou are honest about what you don't know.\n"),
+        ("AGENTS.md", "# Agent Behavior\n- Think step by step\n- Use tools when needed\n- Ask for clarification when uncertain\n- Keep responses concise\n"),
+        ("TOOLS.md", "# Tool Usage\n- Use `exec` for shell commands\n- Use `read_file` / `write_file` / `edit_file` for file operations\n- Use `web_search` to find information online\n- Use `list_dir` to explore directory structure\n"),
+        ("USER.md", "# User Preferences\n(Add your preferences here)\n"),
+        ("HEARTBEAT.md", "# Heartbeat Tasks\n(Add periodic tasks here — the agent will check this file every 30 minutes)\n"),
+    ];
+
+    for (filename, content) in &templates {
+        let path = workspace_dir.join(filename);
+        if !path.exists() {
+            std::fs::write(&path, content).expect("Failed to write template");
+            println!("  ✅ Created {}", filename);
+        }
+    }
+
+    println!("\n{} Setup complete!", LOGO);
+    println!("\nNext steps:");
+    println!("  1. Edit ~/.quectoclaw/config.json and add your API key");
+    println!("  2. Run: quectoclaw agent -m \"Hello!\"");
+    println!("  3. Or start interactive mode: quectoclaw agent");
+}
+
+// ---------------------------------------------------------------------------
+// Other commands
+// ---------------------------------------------------------------------------
+
+fn version_cmd() {
+    println!("{} QuectoClaw v{}", LOGO, VERSION);
+    println!("  Built with Rust 🦀");
+    println!("  Ultra-efficient AI assistant");
+}
+
+async fn status_cmd() {
+    println!("{} QuectoClaw Status\n", LOGO);
+
+    let cfg = load_config(None);
+
+    // Config status
+    let config_path = Config::default_path().unwrap_or_default();
+    if config_path.exists() {
+        println!("  Config:    ✅ {}", config_path.display());
+    } else {
+        println!("  Config:    ❌ Not found (run 'quectoclaw onboard')");
+    }
+
+    // Workspace status
+    match cfg.workspace_path() {
+        Ok(ws) if ws.exists() => println!("  Workspace: ✅ {}", ws.display()),
+        Ok(ws) => println!("  Workspace: ❌ {} (not created)", ws.display()),
+        Err(_) => println!("  Workspace: ❌ Could not resolve path"),
+    }
+
+    // Model
+    println!("  Model:     {}", cfg.agents.defaults.model);
+
+    // Provider status
+    match cfg.resolve_provider() {
+        Some((_, _, name)) => println!("  Provider:  ✅ {} (key configured)", name),
+        None => println!("  Provider:  ❌ No API key found"),
+    }
+
+    // Tool counts
+    println!("  Tools:     6 built-in (exec, read_file, write_file, list_dir, edit_file, web_search)");
+
+    // Channels
+    let mut channels = Vec::new();
+    if cfg.channels.telegram.enabled { channels.push("telegram"); }
+    if cfg.channels.discord.enabled { channels.push("discord"); }
+    if cfg.channels.slack.enabled { channels.push("slack"); }
+    if channels.is_empty() {
+        println!("  Channels:  None enabled");
+    } else {
+        println!("  Channels:  {}", channels.join(", "));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn load_config(path: Option<&str>) -> Config {
+    let config_path = if let Some(p) = path {
+        PathBuf::from(p)
+    } else {
+        Config::default_path().unwrap_or_else(|_| PathBuf::from("config.json"))
+    };
+
+    Config::load(&config_path).unwrap_or_else(|e| {
+        tracing::warn!("Failed to load config: {}, using defaults", e);
+        Config::default()
+    })
+}
+
+fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> ToolRegistry {
+    let registry = ToolRegistry::new();
+
+    // We need to register tools synchronously outside of async context,
+    // so we use tokio::task::block_in_place or just build the vec and register in a block.
+    let tools: Vec<Arc<dyn quectoclaw::tool::Tool>> = vec![
+        Arc::new(ExecTool::new(workspace.to_string(), restrict)),
+        Arc::new(ReadFileTool::new(workspace.to_string(), restrict)),
+        Arc::new(WriteFileTool::new(workspace.to_string(), restrict)),
+        Arc::new(ListDirTool::new(workspace.to_string(), restrict)),
+        Arc::new(EditFileTool::new(workspace.to_string(), restrict)),
+        Arc::new(AppendFileTool::new(workspace.to_string(), restrict)),
+        Arc::new(WebSearchTool::new(
+            Some(cfg.tools.web.search.api_key.clone()),
+            cfg.tools.web.search.max_results,
+        )),
+        Arc::new(WebFetchTool::new(50_000)),
+    ];
+
+    // Use a blocking registration
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(async {
+        for tool in tools {
+            registry.register(tool).await;
+        }
+    });
+
+    registry
+}

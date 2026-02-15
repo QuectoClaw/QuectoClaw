@@ -1,0 +1,12 @@
+// QuectoClaw — Ultra-efficient AI assistant in Rust
+// Inspired by PicoClaw: https://github.com/sipeed/picoclaw
+// License: Apache-2.0
+
+pub mod agent;
+pub mod bus;
+pub mod channel;
+pub mod config;
+pub mod logger;
+pub mod provider;
+pub mod session;
+pub mod tool;
