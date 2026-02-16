@@ -16,7 +16,7 @@ responsibly. **Do not open a public GitHub issue.**
 1. **Email**: Send a detailed report to the repository maintainer via the email
    listed on their GitHub profile.
 2. **GitHub Security Advisories**: Use [GitHub's private vulnerability
-   reporting](https://github.com/mohammad-albarham/QuectoClaw/security/advisories/new)
+   reporting](https://github.com/QuectoClaw/QuectoClaw/security/advisories/new)
    to submit a confidential report directly.
 
 ### What to Include

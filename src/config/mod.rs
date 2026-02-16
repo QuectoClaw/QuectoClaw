@@ -992,6 +992,5 @@ impl Default for MarketConfig {
 }
 
 fn default_registry_url() -> String {
-    "https://raw.githubusercontent.com/mohammad-albarham/QuectoClaw/main/registry/plugins.json"
-        .into()
+    "https://raw.githubusercontent.com/QuectoClaw/QuectoClaw/main/registry/plugins.json".into()
 }
