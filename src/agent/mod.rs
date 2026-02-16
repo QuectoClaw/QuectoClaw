@@ -8,6 +8,7 @@ use crate::bus::{InboundMessage, MessageBus, OutboundMessage};
 use crate::config::Config;
 use crate::metrics::Metrics;
 use crate::provider::{LLMProvider, Message, ToolCall};
+use crate::tui::app::{TuiEvent, TuiState};
 use crate::session::SessionManager;
 use crate::tool::ToolRegistry;
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ pub struct AgentLoop {
     bus: Arc<MessageBus>,
     workspace: String,
     metrics: Metrics,
+    tui_state: Option<TuiState>,
 }
 
 impl AgentLoop {
@@ -46,7 +48,12 @@ impl AgentLoop {
             bus,
             workspace,
             metrics: Metrics::new(),
+            tui_state: None,
         }
+    }
+
+    pub fn set_tui_state(&mut self, state: TuiState) {
+        self.tui_state = Some(state);
     }
 
     /// Process a direct one-shot message (CLI agent mode).
@@ -155,6 +162,14 @@ impl AgentLoop {
                 "Running LLM iteration"
             );
 
+            if let Some(tui) = &self.tui_state {
+                tui.handle_event(TuiEvent::LlmRequest {
+                    model: model.clone(),
+                    messages: messages.len(),
+                })
+                .await;
+            }
+
             let llm_start = std::time::Instant::now();
 
             // Call LLM (streaming on last iteration or when no tool calls expected)
@@ -203,6 +218,14 @@ impl AgentLoop {
 
             let llm_duration = llm_start.elapsed();
 
+            if let Some(tui) = &self.tui_state {
+                tui.handle_event(TuiEvent::LlmResponse {
+                    tokens: response.usage.as_ref().map_or(0, |u| u.total_tokens),
+                    duration_ms: llm_duration.as_millis() as u64,
+                })
+                .await;
+            }
+
             // Log usage and record metrics
             if let Some(ref usage) = response.usage {
                 tracing::info!(
@@ -238,6 +261,17 @@ impl AgentLoop {
             // Process tool calls
             let tool_calls = response.tool_calls.clone().unwrap_or_default();
 
+            if let Some(tui) = &self.tui_state {
+                for tc in &tool_calls {
+                    tui.handle_event(TuiEvent::ToolCall {
+                        tool: tc.function_name().to_string(),
+                        session: session_key.to_string(),
+                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    })
+                    .await;
+                }
+            }
+
             tracing::info!(
                 count = tool_calls.len(),
                 names = %tool_calls.iter().map(|tc| tc.function_name()).collect::<Vec<_>>().join(", "),
@@ -254,8 +288,16 @@ impl AgentLoop {
             let tool_results = self.execute_tools(&tool_calls).await;
 
             // Add tool results as messages
-            for (tc, result) in tool_calls.iter().zip(tool_results.iter()) {
-                let tool_msg = Message::tool_result(&tc.id, &result.for_llm);
+            for result in tool_results {
+                if let Some(tui) = &self.tui_state {
+                    tui.handle_event(TuiEvent::ToolResult {
+                        tool: result.tool_name.clone(),
+                        success: result.success,
+                        duration_ms: result.duration.as_millis() as u64,
+                    })
+                    .await;
+                }
+                let tool_msg = Message::tool_result(&result.tool_call_id, &result.output);
                 messages.push(tool_msg.clone());
                 self.sessions.add_message(session_key, tool_msg).await;
             }

@@ -610,7 +610,9 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         // 1. Ensure at least one API key is present
         if self.resolve_provider().is_none() {
-            return Err(ConfigError::MissingApiKey);
+            return Err(ConfigError::Message(
+                "No API key found for any provider. Please add an API key (e.g. 'openai') to your config.json or set QUECTOCLAW_PROVIDERS_OPENAI_API_KEY environment variable.".to_string()
+            ));
         }
 
         // 2. Validate workspace path (expand tilde if needed and check)
