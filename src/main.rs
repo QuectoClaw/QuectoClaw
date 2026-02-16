@@ -613,6 +613,17 @@ async fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> 
         quectoclaw::tool::plugin::register_plugins(&registry, plugins).await;
     }
 
+    // Load WASM plugins from workspace/wasm_plugins/ directory
+    #[cfg(feature = "wasm")]
+    if cfg.wasm.enabled {
+        let wasm_plugins_dir = std::path::Path::new(workspace).join("wasm_plugins");
+        let wasm_plugins = quectoclaw::tool::wasm_plugin::load_wasm_plugins(&wasm_plugins_dir).await;
+        if !wasm_plugins.is_empty() {
+            tracing::info!(count = wasm_plugins.len(), "Loading WASM plugins");
+            quectoclaw::tool::wasm_plugin::register_wasm_plugins(&registry, wasm_plugins).await;
+        }
+    }
+
     // Initialize MCP servers
     if let Err(e) = quectoclaw::mcp::init_mcp_servers(cfg, &registry).await {
         tracing::error!("Failed to initialize MCP servers: {}", e);

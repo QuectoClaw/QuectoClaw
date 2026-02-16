@@ -55,9 +55,14 @@ crossterm = "0.29.0"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
 
+# WASM plugin runtime
+wasmtime = { version = "29", optional = true }
+wasmtime-wasi = { version = "29", optional = true }
+
 [features]
 default = []
 telegram = ["dep:teloxide"]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
 discord = ["dep:serenity"]
 
 [profile.release]

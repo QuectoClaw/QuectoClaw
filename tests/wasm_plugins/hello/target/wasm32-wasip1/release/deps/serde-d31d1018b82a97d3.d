@@ -1,0 +1,14 @@
+/home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/deps/serde-d31d1018b82a97d3.d: /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/build/serde-f47f2eba8e7154bf/out/private.rs
+
+/home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/deps/libserde-d31d1018b82a97d3.rlib: /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/build/serde-f47f2eba8e7154bf/out/private.rs
+
+/home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/deps/libserde-d31d1018b82a97d3.rmeta: /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/build/serde-f47f2eba8e7154bf/out/private.rs
+
+/home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/pain/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/build/serde-f47f2eba8e7154bf/out/private.rs:
+
+# env-dep:OUT_DIR=/home/pain/Desktop/QuectoClaw/tests/wasm_plugins/hello/target/wasm32-wasip1/release/build/serde-f47f2eba8e7154bf/out

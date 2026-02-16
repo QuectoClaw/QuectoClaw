@@ -1,0 +1,14 @@
+{
+  "name": "wasm_hello",
+  "description": "A test WASM plugin that greets you.",
+  "wasm_file": "wasm_hello.wasm",
+  "parameters": [
+    {
+      "name": "name",
+      "description": "The name to greet",
+      "param_type": "string",
+      "required": false
+    }
+  ],
+  "fuel": 1000000
+}

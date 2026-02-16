@@ -49,6 +49,8 @@ pub struct Config {
     pub routing: RoutingConfig,
     #[serde(default)]
     pub cost: CostConfig,
+    #[serde(default)]
+    pub wasm: WasmConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +562,32 @@ pub struct ModelPricing {
     pub prompt_per_1k: f64,
     /// Cost per 1K completion tokens in USD
     pub completion_per_1k: f64,
+}
+
+// ---------------------------------------------------------------------------
+// WASM Plugins
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Fuel limit for WASM execution (prevents infinite loops)
+    #[serde(default = "default_wasm_fuel")]
+    pub fuel_limit: u64,
+}
+
+impl Default for WasmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            fuel_limit: default_wasm_fuel(),
+        }
+    }
+}
+
+fn default_wasm_fuel() -> u64 {
+    1_000_000
 }
 
 // ---------------------------------------------------------------------------

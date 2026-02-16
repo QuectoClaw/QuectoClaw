@@ -8,6 +8,9 @@ pub mod vectordb_index;
 pub mod vectordb_search;
 pub mod web;
 
+#[cfg(feature = "wasm")]
+pub mod wasm_plugin;
+
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
