@@ -4,3 +4,11 @@ Cargo.lock
 *.swo
 *~
 .DS_Store
+
+# QuectoClaw specific
+agent.md
+plan.md
+config.json
+.env
+*.local
+auth.token
