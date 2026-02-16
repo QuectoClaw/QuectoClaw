@@ -184,3 +184,154 @@ pub async fn register_plugins(registry: &ToolRegistry, plugins: Vec<PluginConfig
         tracing::info!(name = %name, "Registered plugin tool");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_plugin_config_deserialization() {
+        let json = r#"{
+            "name": "greet",
+            "description": "Greet by name",
+            "command": "echo Hello {{name}}",
+            "parameters": [
+                {
+                    "name": "name",
+                    "description": "Name to greet",
+                    "param_type": "string",
+                    "required": true
+                }
+            ],
+            "timeout": 10
+        }"#;
+
+        let config: PluginConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.name, "greet");
+        assert_eq!(config.command, "echo Hello {{name}}");
+        assert_eq!(config.parameters.len(), 1);
+        assert!(config.parameters[0].required);
+        assert_eq!(config.timeout, 10);
+    }
+
+    #[test]
+    fn test_plugin_config_defaults() {
+        let json = r#"{
+            "name": "minimal",
+            "description": "Minimal plugin",
+            "command": "echo hi"
+        }"#;
+
+        let config: PluginConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.timeout, 30); // default
+        assert!(config.parameters.is_empty());
+        assert!(config.cwd.is_none());
+    }
+
+    #[test]
+    fn test_plugin_param_default_type() {
+        let json = r#"{
+            "name": "p",
+            "description": "desc",
+            "required": false
+        }"#;
+        let param: PluginParam = serde_json::from_str(json).unwrap();
+        assert_eq!(param.param_type, "string");
+        assert!(!param.required);
+    }
+
+    #[tokio::test]
+    async fn test_load_plugins_from_dir() {
+        let tmp = TempDir::new().unwrap();
+
+        let plugin_json = r#"{
+            "name": "test-plugin",
+            "description": "A test plugin",
+            "command": "echo test"
+        }"#;
+        std::fs::write(tmp.path().join("test.json"), plugin_json).unwrap();
+
+        // Non-JSON files should be ignored
+        std::fs::write(tmp.path().join("readme.md"), "not a plugin").unwrap();
+
+        let plugins = load_plugins(tmp.path()).await;
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].name, "test-plugin");
+    }
+
+    #[tokio::test]
+    async fn test_load_plugins_empty_dir() {
+        let tmp = TempDir::new().unwrap();
+        let plugins = load_plugins(tmp.path()).await;
+        assert!(plugins.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_load_plugins_nonexistent_dir() {
+        let plugins = load_plugins(Path::new("/nonexistent/plugins")).await;
+        assert!(plugins.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_load_plugins_skips_invalid_json() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("bad.json"), "not valid json").unwrap();
+
+        let plugins = load_plugins(tmp.path()).await;
+        assert!(plugins.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_register_plugins_creates_tools() {
+        let registry = ToolRegistry::new();
+
+        let plugins = vec![PluginConfig {
+            name: "test-tool".into(),
+            description: "A test tool".into(),
+            command: "echo {{msg}}".into(),
+            parameters: vec![PluginParam {
+                name: "msg".into(),
+                description: "Message".into(),
+                param_type: "string".into(),
+                required: true,
+            }],
+            cwd: None,
+            timeout: 30,
+        }];
+
+        register_plugins(&registry, plugins).await;
+
+        let tools = registry.list().await;
+        assert!(tools.contains(&"test-tool".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_plugin_tool_shell_escaping() {
+        let config = PluginConfig {
+            name: "echo-tool".into(),
+            description: "test".into(),
+            command: "echo {{input}}".into(),
+            parameters: vec![],
+            cwd: None,
+            timeout: 5,
+        };
+
+        let tool = PluginTool {
+            config,
+            schema: serde_json::json!({}),
+        };
+
+        // Test with a value containing single quotes
+        let mut args = HashMap::new();
+        args.insert(
+            "input".to_string(),
+            Value::String("hello 'world'".to_string()),
+        );
+
+        let result = tool.execute(args).await;
+        // The command should succeed and the output should contain the escaped text
+        assert!(!result.is_error);
+        assert!(result.for_llm.contains("hello"));
+    }
+}

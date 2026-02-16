@@ -5,6 +5,12 @@ edition = "2021"
 description = "QuectoClaw — Ultra-efficient AI assistant in Rust"
 license = "Apache-2.0"
 authors = ["QuectoClaw contributors"]
+repository = "https://github.com/mohammad-albarham/QuectoClaw"
+homepage = "https://github.com/mohammad-albarham/QuectoClaw"
+documentation = "https://docs.rs/quectoclaw"
+readme = "README.md"
+keywords = ["ai", "assistant", "llm", "cli", "agent"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "quectoclaw"

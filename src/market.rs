@@ -126,3 +126,90 @@ impl PluginMarket {
         Ok(installed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_list_installed_empty_dir() {
+        let tmp = TempDir::new().unwrap();
+        let result = PluginMarket::list_installed(tmp.path()).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_list_installed_nonexistent_dir() {
+        let result = PluginMarket::list_installed(Path::new("/nonexistent/plugins")).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_list_installed_with_plugins() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("my-plugin")).unwrap();
+        std::fs::create_dir(tmp.path().join("another-plugin")).unwrap();
+        // Files should be ignored — only directories count
+        std::fs::write(tmp.path().join("not-a-plugin.txt"), "data").unwrap();
+
+        let mut result = PluginMarket::list_installed(tmp.path()).unwrap();
+        result.sort();
+        assert_eq!(result, vec!["another-plugin", "my-plugin"]);
+    }
+
+    #[test]
+    fn test_market_plugin_serialization() {
+        let plugin = MarketPlugin {
+            name: "test".into(),
+            version: "1.0.0".into(),
+            description: "A test plugin".into(),
+            author: "tester".into(),
+            download_url: "https://example.com/test.json".into(),
+            r#type: PluginType::Shell,
+        };
+        let json = serde_json::to_string(&plugin).unwrap();
+        let parsed: MarketPlugin = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "test");
+        assert_eq!(parsed.r#type, PluginType::Shell);
+    }
+
+    #[test]
+    fn test_plugin_registry_deserialization() {
+        let json = r#"{
+            "plugins": [
+                {
+                    "name": "formatter",
+                    "version": "0.2.0",
+                    "description": "Code formatter",
+                    "author": "dev",
+                    "download_url": "https://example.com/formatter.json",
+                    "type": "shell"
+                },
+                {
+                    "name": "wasm-calc",
+                    "version": "1.0.0",
+                    "description": "Calculator",
+                    "author": "dev",
+                    "download_url": "https://example.com/calc.wasm",
+                    "type": "wasm"
+                }
+            ]
+        }"#;
+        let registry: PluginRegistry = serde_json::from_str(json).unwrap();
+        assert_eq!(registry.plugins.len(), 2);
+        assert_eq!(registry.plugins[0].r#type, PluginType::Shell);
+        assert_eq!(registry.plugins[1].r#type, PluginType::Wasm);
+    }
+
+    #[test]
+    fn test_plugin_type_variants() {
+        assert_ne!(PluginType::Shell, PluginType::Wasm);
+
+        let shell_json = serde_json::to_string(&PluginType::Shell).unwrap();
+        assert_eq!(shell_json, "\"shell\"");
+
+        let wasm_json = serde_json::to_string(&PluginType::Wasm).unwrap();
+        assert_eq!(wasm_json, "\"wasm\"");
+    }
+}

@@ -53,8 +53,6 @@ impl Gateway {
             channels.push(Arc::new(ch));
         }
 
-        // TODO: Initialize Discord, Slack, etc.
-
         Self {
             config,
             agent,

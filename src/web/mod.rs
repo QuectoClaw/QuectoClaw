@@ -10,10 +10,10 @@ pub mod templates;
 use crate::config::Config;
 use crate::metrics::Metrics;
 use axum::extract::Request;
+use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
-use axum::http::StatusCode;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
@@ -27,11 +27,7 @@ pub struct WebState {
 }
 
 /// Auth middleware: check Authorization: Bearer <token> on /api/* routes.
-async fn auth_middleware(
-    state: Arc<WebState>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn auth_middleware(state: Arc<WebState>, request: Request, next: Next) -> Response {
     // Skip auth if no token is configured (e.g. local-only dev use)
     if state.dashboard_token.is_empty() {
         return next.run(request).await;
@@ -51,7 +47,11 @@ async fn auth_middleware(
                 (StatusCode::UNAUTHORIZED, "Invalid bearer token").into_response()
             }
         }
-        _ => (StatusCode::UNAUTHORIZED, "Authorization: Bearer <token> required").into_response(),
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            "Authorization: Bearer <token> required",
+        )
+            .into_response(),
     }
 }
 

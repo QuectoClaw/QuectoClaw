@@ -1,0 +1,28 @@
+# QuectoClaw — Docker Compose for gateway deployment
+#
+# Usage:
+#   cp .env.example .env   # fill in API keys
+#   docker compose up -d
+
+services:
+  quectoclaw:
+    build: .
+    container_name: quectoclaw
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"   # web dashboard
+    volumes:
+      - quecto-data:/home/quecto/.quectoclaw
+    env_file:
+      - .env
+    environment:
+      - QUECTO_PROVIDER_BASE_URL=${QUECTO_PROVIDER_BASE_URL:-https://api.openai.com/v1}
+      - QUECTO_DEFAULT_MODEL=${QUECTO_DEFAULT_MODEL:-gpt-4o}
+    healthcheck:
+      test: ["CMD", "quectoclaw", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  quecto-data:

@@ -398,7 +398,7 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
                 || v6.is_unspecified()                   // ::
                 || v6.segments()[0] == 0xfe80            // link-local
                 || v6.segments()[0] == 0xfc00            // unique local
-                || v6.segments()[0] == 0xfd00            // unique local
+                || v6.segments()[0] == 0xfd00 // unique local
         }
     }
 }

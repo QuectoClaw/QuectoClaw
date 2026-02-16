@@ -139,7 +139,9 @@ impl ExecTool {
         let path_re = Regex::new(r"[A-Za-z]:\\[^\\\x22']+|/[^\s\x22']+").unwrap();
         for raw in path_re.find_iter(command) {
             let raw_path = std::path::Path::new(raw.as_str());
-            let resolved = raw_path.canonicalize().unwrap_or_else(|_| raw_path.to_path_buf());
+            let resolved = raw_path
+                .canonicalize()
+                .unwrap_or_else(|_| raw_path.to_path_buf());
             for fp in &forbidden {
                 if resolved.starts_with(fp) {
                     return Some(format!(
@@ -206,9 +208,7 @@ impl Tool for ExecTool {
                     .canonicalize()
                     .unwrap_or_else(|_| cwd_path.to_path_buf());
                 if !cwd_resolved.starts_with(&workspace_abs) {
-                    return ToolResult::error(
-                        "working_dir blocked: path is outside the workspace",
-                    );
+                    return ToolResult::error("working_dir blocked: path is outside the workspace");
                 }
             }
         }
