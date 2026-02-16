@@ -10,12 +10,14 @@ use quectoclaw::provider::factory::create_provider;
 use quectoclaw::tool::exec::ExecTool;
 use quectoclaw::tool::filesystem::*;
 use quectoclaw::tool::subagent::SubagentTool;
+use quectoclaw::tool::vectordb_index::VectorIndexTool;
+use quectoclaw::tool::vectordb_search::VectorSearchTool;
 use quectoclaw::tool::web::{WebFetchTool, WebSearchTool};
 use quectoclaw::tool::ToolRegistry;
+use quectoclaw::vectordb::VectorStore;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LOGO: &str = "🦀";
 
 // ---------------------------------------------------------------------------
@@ -61,12 +63,26 @@ enum Commands {
     /// Show version information
     Version,
     /// Show status of configuration and workspace
-    Status,
+    Status {
+        /// Config file path
+        #[arg(short, long)]
+        config: Option<String>,
+    },
     /// Launch the TUI monitoring dashboard
     Dashboard {
         /// Config file path
         #[arg(short, long)]
         config: Option<String>,
+    },
+    /// Launch the web-based monitoring dashboard
+    #[command(name = "webui")]
+    WebUI {
+        /// Config file path
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Port to listen on (default: 3000)
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
     },
 }
 
@@ -97,11 +113,14 @@ async fn main() {
         Some(Commands::Version) => {
             version_cmd();
         }
-        Some(Commands::Status) => {
-            status_cmd().await;
+        Some(Commands::Status { config }) => {
+            status_cmd(config).await;
         }
         Some(Commands::Dashboard { config }) => {
             dashboard_cmd(config).await;
+        }
+        Some(Commands::WebUI { config, port }) => {
+            webui_cmd(config, port).await;
         }
         None => {
             // Default: run in interactive agent mode
@@ -188,7 +207,8 @@ async fn interactive_mode(agent: Arc<AgentLoop>, session: &str) {
 
     println!(
         "{} QuectoClaw v{} — Ultra-efficient AI Assistant",
-        LOGO, VERSION
+        LOGO,
+        quectoclaw::VERSION
     );
     println!("Type your message and press Enter. Type 'exit' or Ctrl+D to quit.\n");
 
@@ -251,12 +271,18 @@ async fn interactive_mode(agent: Arc<AgentLoop>, session: &str) {
                             println!("  /fork [name]  — Branch this conversation");
                             println!("  /clear        — Clear session (auto-backs up)");
                             println!("  /metrics      — Show performance metrics");
+                            println!("  /cost         — Show cost breakdown");
                             println!("  /help         — Show this help");
                             println!("  exit          — Quit\n");
                             continue;
                         }
                         "/metrics" => {
                             let report = agent.metrics().format_report().await;
+                            println!("{}\n", report);
+                            continue;
+                        }
+                        "/cost" => {
+                            let report = agent.metrics().format_cost_report().await;
                             println!("{}\n", report);
                             continue;
                         }
@@ -446,15 +472,15 @@ async fn onboard_cmd() {
 // ---------------------------------------------------------------------------
 
 fn version_cmd() {
-    println!("{} QuectoClaw v{}", LOGO, VERSION);
+    println!("{} QuectoClaw v{}", LOGO, quectoclaw::VERSION);
     println!("  Built with Rust 🦀");
     println!("  Ultra-efficient AI assistant");
 }
 
-async fn status_cmd() {
+async fn status_cmd(config_path: Option<String>) {
     println!("{} QuectoClaw Status\n", LOGO);
 
-    let cfg = load_config(None);
+    let cfg = load_config(config_path.as_deref());
 
     // Config status
     let config_path = Config::default_path().unwrap_or_default();
@@ -480,10 +506,23 @@ async fn status_cmd() {
         None => println!("  Provider:  ❌ No API key found"),
     }
 
-    // Tool counts
-    println!(
-        "  Tools:     6 built-in (exec, read_file, write_file, list_dir, edit_file, web_search)"
-    );
+    // Build tool registry for current config to check tools
+    let workspace = cfg
+        .workspace_path()
+        .unwrap_or_else(|_| PathBuf::from("workspace"));
+    let tools = create_tool_registry(
+        &workspace.to_string_lossy(),
+        cfg.agents.defaults.restrict_to_workspace,
+        &cfg,
+    )
+    .await;
+
+    // Tool status
+    let count = tools.count().await;
+    println!("  Tools:     {} registered", count);
+    for summary in tools.get_summaries().await {
+        println!("             {}", summary);
+    }
 
     // Channels
     let mut channels = Vec::new();
@@ -542,12 +581,41 @@ async fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> 
         registry.register(tool).await;
     }
 
+    // Register vector DB tools
+    let vectordb_path = std::path::Path::new(workspace).join("memory/vectordb.json");
+    let vector_store = if vectordb_path.exists() {
+        match VectorStore::load(&vectordb_path) {
+            Ok(store) => {
+                tracing::info!(docs = store.len(), "Loaded vector store");
+                store
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load vector store: {}, creating new", e);
+                VectorStore::new()
+            }
+        }
+    } else {
+        VectorStore::new()
+    };
+    let store = Arc::new(tokio::sync::RwLock::new(vector_store));
+    registry
+        .register(Arc::new(VectorSearchTool::new(store.clone())))
+        .await;
+    registry
+        .register(Arc::new(VectorIndexTool::new(store, workspace.to_string())))
+        .await;
+
     // Load plugins from workspace/plugins/ directory
     let plugins_dir = std::path::Path::new(workspace).join("plugins");
     let plugins = quectoclaw::tool::plugin::load_plugins(&plugins_dir).await;
     if !plugins.is_empty() {
         tracing::info!(count = plugins.len(), "Loading plugins");
         quectoclaw::tool::plugin::register_plugins(&registry, plugins).await;
+    }
+
+    // Initialize MCP servers
+    if let Err(e) = quectoclaw::mcp::init_mcp_servers(cfg, &registry).await {
+        tracing::error!("Failed to initialize MCP servers: {}", e);
     }
 
     registry
@@ -639,6 +707,26 @@ async fn dashboard_cmd(config_path: Option<String>) {
 
     if let Err(e) = quectoclaw::tui::run(state, cfg).await {
         eprintln!("{} Dashboard error: {}", LOGO, e);
+        std::process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WebUI command (Axum + HTMX)
+// ---------------------------------------------------------------------------
+
+async fn webui_cmd(config_path: Option<String>, port: u16) {
+    let cfg = load_config(config_path.as_deref());
+    let metrics = quectoclaw::metrics::Metrics::new();
+
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+    println!(
+        "{} QuectoClaw Web Dashboard starting at http://localhost:{}",
+        LOGO, port
+    );
+
+    if let Err(e) = quectoclaw::web::start_web_server(addr, metrics, cfg).await {
+        eprintln!("{} Web UI error: {}", LOGO, e);
         std::process::exit(1);
     }
 }

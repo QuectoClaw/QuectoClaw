@@ -1,0 +1,19 @@
+{
+  "agents": {
+    "defaults": {
+      "model": "gpt-4o-mini",
+      "workspace": "/home/pain/Desktop/QuectoClaw/tests/workspace"
+    }
+  },
+  "providers": {
+    "openai": { "api_key": "dummy" }
+  },
+  "mcp": {
+    "servers": {
+      "mock": {
+        "command": "python3",
+        "args": ["/home/pain/Desktop/QuectoClaw/tests/mock_mcp.py"]
+      }
+    }
+  }
+}

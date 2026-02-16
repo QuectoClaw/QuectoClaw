@@ -65,7 +65,12 @@ pub async fn run(state: TuiState, cfg: Config) -> anyhow::Result<()> {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Char('c') => {
                         // In a real app we might clear logs, for now just push a log
-                        state.push_log(LogLevel::Info, "Command Log: Clear logs (not fully implemented)".to_string()).await;
+                        state
+                            .push_log(
+                                LogLevel::Info,
+                                "Command Log: Clear logs (not fully implemented)".to_string(),
+                            )
+                            .await;
                     }
                     _ => {}
                 }

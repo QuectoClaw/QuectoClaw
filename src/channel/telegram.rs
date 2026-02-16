@@ -104,7 +104,8 @@ mod implementation {
 
             // Format content — convert markdown-ish to something Telegram likes or just send as plain text
             // For now, we'll use MarkdownV2 if possible, or just raw text.
-            let res = self.bot
+            let res = self
+                .bot
                 .send_message(ChatId(chat_id), &msg.content)
                 .parse_mode(ParseMode::MarkdownV2)
                 .await;

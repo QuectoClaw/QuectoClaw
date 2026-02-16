@@ -1,8 +1,10 @@
 // QuectoClaw — Metrics and observability.
 //
 // Lightweight in-process metrics for tracking token usage, response times,
-// tool success rates, and request counts. Exposes a simple report API.
+// tool success rates, request counts, and per-model cost tracking.
+// Exposes a simple report API.
 
+use crate::config::ModelPricing;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,6 +37,18 @@ struct MetricsInner {
     model_requests: HashMap<String, u64>,
     /// Channel message counts.
     channel_messages: HashMap<String, u64>,
+    /// Per-model accumulated cost in USD.
+    model_costs: HashMap<String, f64>,
+    /// Total accumulated cost in USD.
+    total_cost: f64,
+}
+
+/// Budget alert returned when cost exceeds threshold.
+#[derive(Debug, Clone)]
+pub struct BudgetAlert {
+    pub total_cost: f64,
+    pub budget_limit: f64,
+    pub percentage_used: f64,
 }
 
 impl Metrics {
@@ -59,6 +73,46 @@ impl Metrics {
         m.completion_tokens += completion_tokens as u64;
         m.llm_total_ms += duration.as_millis() as u64;
         *m.model_requests.entry(model.to_string()).or_insert(0) += 1;
+    }
+
+    /// Record cost for an LLM call using pricing info.
+    pub async fn record_cost(
+        &self,
+        model: &str,
+        prompt_tokens: usize,
+        completion_tokens: usize,
+        pricing: &ModelPricing,
+    ) {
+        let prompt_cost = (prompt_tokens as f64 / 1000.0) * pricing.prompt_per_1k;
+        let completion_cost = (completion_tokens as f64 / 1000.0) * pricing.completion_per_1k;
+        let call_cost = prompt_cost + completion_cost;
+
+        let mut m = self.inner.write().await;
+        *m.model_costs.entry(model.to_string()).or_insert(0.0) += call_cost;
+        m.total_cost += call_cost;
+    }
+
+    /// Check if budget threshold is exceeded.
+    pub async fn check_budget(&self, limit: f64, threshold_pct: f64) -> Option<BudgetAlert> {
+        if limit <= 0.0 {
+            return None;
+        }
+        let m = self.inner.read().await;
+        let pct = (m.total_cost / limit) * 100.0;
+        if pct >= threshold_pct {
+            Some(BudgetAlert {
+                total_cost: m.total_cost,
+                budget_limit: limit,
+                percentage_used: pct,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Get total accumulated cost.
+    pub async fn total_cost(&self) -> f64 {
+        self.inner.read().await.total_cost
     }
 
     /// Record a tool execution.
@@ -124,6 +178,8 @@ impl Metrics {
             tool_stats,
             model_requests: m.model_requests.clone(),
             channel_messages: m.channel_messages.clone(),
+            total_cost: m.total_cost,
+            model_costs: m.model_costs.clone(),
         }
     }
 
@@ -168,14 +224,51 @@ impl Metrics {
         if !r.model_requests.is_empty() {
             out.push_str("\n─── Models ───\n");
             for (model, count) in &r.model_requests {
-                out.push_str(&format!("  {:<30} {:>4} requests\n", model, count));
+                let cost = r.model_costs.get(model).copied().unwrap_or(0.0);
+                out.push_str(&format!(
+                    "  {:<30} {:>4} requests  ${:.4}\n",
+                    model, count, cost
+                ));
             }
+        }
+
+        // Cost summary
+        if r.total_cost > 0.0 {
+            out.push_str(&format!("\n─── Cost ───\n  Total: ${:.4}\n", r.total_cost));
         }
 
         if !r.channel_messages.is_empty() {
             out.push_str("\n─── Channels ───\n");
             for (ch, count) in &r.channel_messages {
                 out.push_str(&format!("  {:<20} {:>4} messages\n", ch, count));
+            }
+        }
+
+        out
+    }
+
+    /// Format a cost-focused report.
+    pub async fn format_cost_report(&self) -> String {
+        let r = self.report().await;
+        let mut out = String::new();
+
+        out.push_str("═══ QuectoClaw Cost Report ═══\n");
+        out.push_str(&format!("Total Cost:   ${:.6}\n", r.total_cost));
+        out.push_str(&format!(
+            "Total Tokens: {} (prompt: {}, completion: {})\n",
+            r.total_tokens, r.prompt_tokens, r.completion_tokens
+        ));
+
+        if !r.model_costs.is_empty() {
+            out.push_str("\n─── Per-Model Breakdown ───\n");
+            let mut costs: Vec<(&String, &f64)> = r.model_costs.iter().collect();
+            costs.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (model, cost) in &costs {
+                let reqs = r.model_requests.get(*model).copied().unwrap_or(0);
+                out.push_str(&format!(
+                    "  {:<30} {:>4} requests  ${:.6}\n",
+                    model, reqs, cost
+                ));
             }
         }
 
@@ -203,6 +296,8 @@ pub struct MetricsReport {
     pub tool_stats: Vec<ToolStat>,
     pub model_requests: HashMap<String, u64>,
     pub channel_messages: HashMap<String, u64>,
+    pub total_cost: f64,
+    pub model_costs: HashMap<String, f64>,
 }
 
 /// Per-tool statistics.
@@ -257,5 +352,72 @@ mod tests {
         assert!(text.contains("QuectoClaw Metrics"));
         assert!(text.contains("LLM Requests: 1"));
         assert!(text.contains("Tokens:       75"));
+    }
+
+    #[tokio::test]
+    async fn test_cost_tracking() {
+        let metrics = Metrics::new();
+
+        let pricing = ModelPricing {
+            prompt_per_1k: 0.01,
+            completion_per_1k: 0.03,
+        };
+
+        // 1000 prompt tokens = $0.01, 500 completion tokens = $0.015
+        metrics.record_cost("gpt-4", 1000, 500, &pricing).await;
+
+        let total = metrics.total_cost().await;
+        assert!((total - 0.025).abs() < 0.0001);
+
+        let report = metrics.report().await;
+        assert!((report.total_cost - 0.025).abs() < 0.0001);
+        assert!(report.model_costs.contains_key("gpt-4"));
+    }
+
+    #[tokio::test]
+    async fn test_budget_alert() {
+        let metrics = Metrics::new();
+
+        let pricing = ModelPricing {
+            prompt_per_1k: 0.01,
+            completion_per_1k: 0.03,
+        };
+
+        // Accumulate $0.025
+        metrics.record_cost("gpt-4", 1000, 500, &pricing).await;
+
+        // Budget = $0.03, threshold = 80% = $0.024
+        // $0.025 > $0.024, should alert
+        let alert = metrics.check_budget(0.03, 80.0).await;
+        assert!(alert.is_some());
+        let a = alert.unwrap();
+        assert!(a.percentage_used > 80.0);
+
+        // Budget = $1.0, threshold = 80% = $0.80
+        // $0.025 < $0.80, should not alert
+        let no_alert = metrics.check_budget(1.0, 80.0).await;
+        assert!(no_alert.is_none());
+
+        // No limit (0.0), should never alert
+        let no_limit = metrics.check_budget(0.0, 80.0).await;
+        assert!(no_limit.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cost_report_format() {
+        let metrics = Metrics::new();
+        let pricing = ModelPricing {
+            prompt_per_1k: 0.01,
+            completion_per_1k: 0.03,
+        };
+        metrics.record_cost("gpt-4", 1000, 500, &pricing).await;
+        metrics
+            .record_llm_call("gpt-4", 1000, 500, Duration::from_millis(200))
+            .await;
+
+        let text = metrics.format_cost_report().await;
+        assert!(text.contains("Cost Report"));
+        assert!(text.contains("gpt-4"));
+        assert!(text.contains("$0.02"));
     }
 }

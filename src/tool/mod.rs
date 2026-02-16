@@ -4,6 +4,8 @@ pub mod exec;
 pub mod filesystem;
 pub mod plugin;
 pub mod subagent;
+pub mod vectordb_index;
+pub mod vectordb_search;
 pub mod web;
 
 use async_trait::async_trait;

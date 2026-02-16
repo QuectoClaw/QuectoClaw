@@ -7,10 +7,11 @@ pub mod memory;
 use crate::bus::{InboundMessage, MessageBus, OutboundMessage};
 use crate::config::Config;
 use crate::metrics::Metrics;
+use crate::provider::router::ModelRouter;
 use crate::provider::{LLMProvider, Message, ToolCall};
-use crate::tui::app::{TuiEvent, TuiState};
 use crate::session::SessionManager;
 use crate::tool::ToolRegistry;
+use crate::tui::app::{TuiEvent, TuiState};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -32,6 +33,48 @@ pub struct AgentLoop {
     workspace: String,
     metrics: Metrics,
     tui_state: Option<TuiState>,
+    rate_limiter: Arc<RateLimiter>,
+    router: ModelRouter,
+}
+
+struct RateLimiter {
+    // Key: sender_id or session_key
+    history: tokio::sync::Mutex<HashMap<String, Vec<std::time::Instant>>>,
+    max_requests: u64,
+    window: std::time::Duration,
+}
+
+impl RateLimiter {
+    pub fn new(max_requests: u64, window_secs: u64) -> Self {
+        Self {
+            history: tokio::sync::Mutex::new(HashMap::new()),
+            max_requests,
+            window: std::time::Duration::from_secs(window_secs),
+        }
+    }
+
+    pub async fn check_rate_limit(&self, key: &str) -> bool {
+        if self.max_requests == 0 {
+            return true; // No limit
+        }
+
+        let mut history = self.history.lock().await;
+        let now = std::time::Instant::now();
+        let entries = history.entry(key.to_string()).or_default();
+
+        // 1. Remove old entries outside the window
+        let window = self.window;
+        entries.retain(|&t| now.duration_since(t) < window);
+
+        // 2. Check if we're over the limit
+        if entries.len() as u64 >= self.max_requests {
+            return false;
+        }
+
+        // 3. Record this request
+        entries.push(now);
+        true
+    }
 }
 
 impl AgentLoop {
@@ -48,6 +91,18 @@ impl AgentLoop {
 
         let sessions = SessionManager::new(Path::new(&workspace));
 
+        let rate_limit_requests = config.gateway.rate_limit_requests;
+        let rate_limit_seconds = config.gateway.rate_limit_seconds;
+
+        let router = ModelRouter::new(
+            if config.routing.enabled {
+                config.routing.routes.clone()
+            } else {
+                vec![]
+            },
+            config.agents.defaults.model.clone(),
+        );
+
         Self {
             config,
             provider,
@@ -57,6 +112,8 @@ impl AgentLoop {
             workspace,
             metrics: Metrics::new(),
             tui_state: None,
+            rate_limiter: Arc::new(RateLimiter::new(rate_limit_requests, rate_limit_seconds)),
+            router,
         }
     }
 
@@ -109,7 +166,12 @@ impl AgentLoop {
         stream_tx: Option<tokio::sync::mpsc::Sender<crate::provider::StreamEvent>>,
     ) -> anyhow::Result<String> {
         let max_iterations = self.config.agents.defaults.max_tool_iterations;
-        let model = &self.config.agents.defaults.model;
+        // Use router to select model based on message content
+        let routed_model = self.router.resolve_model(user_message).to_string();
+        let model = &routed_model;
+        if self.router.has_routes() && *model != self.config.agents.defaults.model {
+            tracing::info!(routed_model = %model, "Multi-model routing selected alternate model");
+        }
 
         // 1. Build system prompt
         let system_prompt = context::build_system_prompt(&self.workspace, &self.tools).await;
@@ -250,6 +312,43 @@ impl AgentLoop {
                         llm_duration,
                     )
                     .await;
+
+                // Record cost if pricing is available
+                if self.config.cost.enabled {
+                    // Try exact match first, then prefix match
+                    let pricing = self.config.cost.pricing.get(model).or_else(|| {
+                        self.config
+                            .cost
+                            .pricing
+                            .iter()
+                            .find(|(k, _)| model.starts_with(k.as_str()))
+                            .map(|(_, v)| v)
+                    });
+                    if let Some(p) = pricing {
+                        self.metrics
+                            .record_cost(model, usage.prompt_tokens, usage.completion_tokens, p)
+                            .await;
+                        // Check budget alert
+                        if let Some(alert) = self
+                            .metrics
+                            .check_budget(
+                                self.config.cost.budget_limit,
+                                self.config.cost.alert_threshold,
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                total_cost = alert.total_cost,
+                                budget_limit = alert.budget_limit,
+                                percentage = format!("{:.1}%", alert.percentage_used),
+                                "⚠️ Budget alert: {:.1}% of ${:.2} budget used (${:.4} spent)",
+                                alert.percentage_used,
+                                alert.budget_limit,
+                                alert.total_cost
+                            );
+                        }
+                    }
+                }
             } else {
                 self.metrics
                     .record_llm_call(model, 0, 0, llm_duration)
@@ -343,7 +442,7 @@ impl AgentLoop {
                 let result = reg.execute(&name, args_converted).await;
                 let duration = start.elapsed();
                 m.record_tool_call(&name, !result.is_error, duration).await;
-                
+
                 InternalToolResult {
                     tool_call_id: id,
                     tool_name: name,
@@ -439,6 +538,21 @@ impl AgentLoop {
                         sender = %msg.sender_id,
                         "Processing inbound message"
                     );
+
+                    // Rate limiting
+                    if !self.rate_limiter.check_rate_limit(&msg.sender_id).await {
+                        tracing::warn!(sender = %msg.sender_id, "Rate limit exceeded");
+                        self.bus
+                            .publish_outbound(OutboundMessage {
+                                channel: msg.channel,
+                                chat_id: msg.chat_id,
+                                content: "⚠️ Rate limit exceeded. Please wait a moment."
+                                    .to_string(),
+                                metadata: HashMap::new(),
+                            })
+                            .await;
+                        continue;
+                    }
 
                     match self.process_message(msg).await {
                         Ok(response) => {

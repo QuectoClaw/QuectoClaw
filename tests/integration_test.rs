@@ -1,123 +1,236 @@
 use quectoclaw::agent::AgentLoop;
+use quectoclaw::bus::MessageBus;
 use quectoclaw::config::Config;
 use quectoclaw::provider::http::HTTPProvider;
 use quectoclaw::tool::exec::ExecTool;
 use quectoclaw::tool::ToolRegistry;
-use quectoclaw::bus::MessageBus;
+use serde_json::json;
 use std::sync::Arc;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use serde_json::json;
-use std::collections::HashMap;
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt::try_init();
+}
 
 #[tokio::test]
 async fn test_agent_integration_with_tool() {
-    // 1. Start mock server
+    init_tracing();
     let mock_server = MockServer::start().await;
 
-    // 2. Prepare mock LLM response (Tool Call)
-    let tool_call_resp = json!({
-        "id": "chatcmpl-123",
-        "object": "chat.completion",
-        "created": 1677652288,
-        "model": "gpt-4o",
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": null,
-                "tool_calls": [{
-                    "id": "call_abc123",
-                    "type": "function",
-                    "function": {
-                        "name": "exec",
-                        "arguments": "{\"command\":\"echo hello-test\"}"
-                    }
-                }]
-            },
-            "finish_reason": "tool_calls"
-        }],
-        "usage": {
-            "prompt_tokens": 9,
-            "completion_tokens": 12,
-            "total_tokens": 21
-        }
-    });
-
-    // 3. Prepare mock LLM response (Final Answer)
-    let final_resp = json!({
-        "id": "chatcmpl-456",
-        "object": "chat.completion",
-        "created": 1677652289,
-        "model": "gpt-4o",
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": "The command returned hello-test"
-            },
-            "finish_reason": "stop"
-        }],
-        "usage": {
-            "prompt_tokens": 40,
-            "completion_tokens": 10,
-            "total_tokens": 50
-        }
-    });
-
-    // Mock second call (final answer)
+    // Turn 1: User Message -> Exec Tool Call - mount first
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(wiremock::matchers::body_string_contains("\"role\":\"tool\""))
-        .respond_with(ResponseTemplate::new(200).set_body_json(final_resp))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    // Mock first call (tool call)
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .and(wiremock::matchers::body_string_contains("\"role\":\"user\""))
-        // Important: ensure it doesn't match once tool results are present
-        .and(wiremock::matchers::body_partial_json(json!({
-            "messages": [
-                { "role": "system" },
-                { "role": "user" }
-            ]
+        .and(wiremock::matchers::body_string_contains(
+            "\"role\":\"user\"",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "exec",
+                            "arguments": "{\"command\":\"echo hello-test\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(tool_call_resp))
+        .up_to_n_times(1)
         .expect(1)
         .mount(&mock_server)
         .await;
 
-    // 4. Setup Agent
+    // Turn 2: Tool Result -> Final Answer - mount last
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_string_contains(
+            "\"role\":\"tool\"",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The command returned hello-test"
+                },
+                "finish_reason": "stop"
+            }]
+        })))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
     let mut config = Config::default();
     config.providers.openai.api_base = mock_server.uri();
     config.providers.openai.api_key = "test-key".to_string();
-    
-    // Create a temporary workspace
+
     let tmp_dir = tempfile::tempdir().unwrap();
     let ws_path = tmp_dir.path().to_string_lossy().to_string();
     config.agents.defaults.workspace = ws_path.clone();
 
-    let provider = Arc::new(HTTPProvider::new(
-        config.providers.openai.api_key.clone(),
-        config.providers.openai.api_base.clone(),
-        None,
-        config.agents.defaults.model.clone(),
-    ).unwrap());
+    let provider = Arc::new(
+        HTTPProvider::new(
+            config.providers.openai.api_key.clone(),
+            config.providers.openai.api_base.clone(),
+            None,
+            config.agents.defaults.model.clone(),
+        )
+        .unwrap(),
+    );
 
     let registry = ToolRegistry::new();
-    registry.register(Arc::new(ExecTool::new(ws_path, false))).await;
+    registry
+        .register(Arc::new(ExecTool::new(ws_path, false)))
+        .await;
 
     let bus = Arc::new(MessageBus::new());
     let agent = AgentLoop::new(config, provider, registry, bus);
 
-    // 5. Run agent loop
-    let result = agent.run_agent_loop("say hello", "test-session", true, None::<tokio::sync::mpsc::Sender<quectoclaw::provider::StreamEvent>>).await.unwrap();
+    let result = agent
+        .run_agent_loop("say hello", "test-session", true, None)
+        .await
+        .unwrap();
 
-    println!("AGENT RESULT: {}", result);
-
-    // 6. Assertions
     assert!(result.contains("hello-test"));
+}
+
+#[tokio::test]
+async fn test_agent_retry_on_500() {
+    init_tracing();
+    let mock_server = MockServer::start().await;
+
+    // Error once, then success
+
+    // Success Mock (General) - Priority 1
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "Retry worked" },
+                "finish_reason": "stop"
+            }]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Error Mock (Highest priority) - Mounted last
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(500))
+        .up_to_n_times(1)
+        .mount(&mock_server)
+        .await;
+
+    let mut config = Config::default();
+    config.agents.defaults.max_retries = 2;
+    config.agents.defaults.retry_delay_ms = 10;
+
+    let provider = Arc::new(
+        HTTPProvider::new("test-key".into(), mock_server.uri(), None, "gpt-4o".into()).unwrap(),
+    );
+
+    let registry = ToolRegistry::new();
+    let bus = Arc::new(MessageBus::new());
+    let agent = AgentLoop::new(config, provider, registry, bus);
+
+    let result = agent
+        .run_agent_loop("test retry", "test-session", false, None)
+        .await
+        .unwrap();
+    assert_eq!(result, "Retry worked");
+}
+
+#[tokio::test]
+async fn test_tool_failure_handling() {
+    init_tracing();
+    let mock_server = MockServer::start().await;
+
+    // Turn 1: LLM calls read_file (non-existent) - mount first
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_string_contains(
+            "\"role\":\"user\"",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_err_123",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"non_existent.txt\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // Turn 2: Final Answer based on error - mount last
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_string_contains(
+            "\"role\":\"tool\"",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The file does not exist."
+                },
+                "finish_reason": "stop"
+            }]
+        })))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let mut config = Config::default();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let ws_path = tmp_dir.path().to_string_lossy().to_string();
+    config.agents.defaults.workspace = ws_path.clone();
+
+    let provider = Arc::new(
+        HTTPProvider::new("test-key".into(), mock_server.uri(), None, "gpt-4o".into()).unwrap(),
+    );
+
+    let registry = ToolRegistry::new();
+    use quectoclaw::tool::filesystem::ReadFileTool;
+    registry
+        .register(Arc::new(ReadFileTool::new(ws_path, true)))
+        .await;
+
+    let bus = Arc::new(MessageBus::new());
+    let agent = AgentLoop::new(config, provider, registry, bus);
+
+    let result = agent
+        .run_agent_loop("read missing file", "test-session", false, None)
+        .await
+        .unwrap();
+
+    assert!(result.contains("does not exist"));
 }

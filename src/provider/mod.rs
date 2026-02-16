@@ -2,6 +2,7 @@
 
 pub mod factory;
 pub mod http;
+pub mod router;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

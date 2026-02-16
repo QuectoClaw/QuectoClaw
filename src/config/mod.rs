@@ -43,6 +43,12 @@ pub struct Config {
     pub heartbeat: HeartbeatConfig,
     #[serde(default)]
     pub devices: DevicesConfig,
+    #[serde(default)]
+    pub mcp: MCPConfig,
+    #[serde(default)]
+    pub routing: RoutingConfig,
+    #[serde(default)]
+    pub cost: CostConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +335,10 @@ pub struct GatewayConfig {
     pub host: String,
     #[serde(default = "default_gateway_port")]
     pub port: u16,
+    #[serde(default = "default_rate_limit_requests")]
+    pub rate_limit_requests: u64,
+    #[serde(default = "default_rate_limit_seconds")]
+    pub rate_limit_seconds: u64,
 }
 
 impl Default for GatewayConfig {
@@ -336,6 +346,8 @@ impl Default for GatewayConfig {
         Self {
             host: default_gateway_host(),
             port: default_gateway_port(),
+            rate_limit_requests: default_rate_limit_requests(),
+            rate_limit_seconds: default_rate_limit_seconds(),
         }
     }
 }
@@ -345,6 +357,12 @@ fn default_gateway_host() -> String {
 }
 fn default_gateway_port() -> u16 {
     18790
+}
+fn default_rate_limit_requests() -> u64 {
+    30
+}
+fn default_rate_limit_seconds() -> u64 {
+    60
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +428,138 @@ pub struct DevicesConfig {
     pub enabled: bool,
     #[serde(default)]
     pub monitor_usb: bool,
+}
+
+// ---------------------------------------------------------------------------
+// MCP
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MCPConfig {
+    #[serde(default)]
+    pub servers: HashMap<String, MCPServerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MCPServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+// ---------------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RoutingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub routes: Vec<ModelRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRoute {
+    /// Keywords to match in the user message (case-insensitive)
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// Model to use when this route matches
+    pub model: String,
+    /// Human-readable description of why this route exists
+    #[serde(default)]
+    pub description: String,
+}
+
+// ---------------------------------------------------------------------------
+// Cost Tracking
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Per-model pricing (model name -> pricing)
+    #[serde(default = "default_pricing")]
+    pub pricing: HashMap<String, ModelPricing>,
+    /// Budget limit in USD (0.0 = no limit)
+    #[serde(default)]
+    pub budget_limit: f64,
+    /// Alert when this percentage of budget is used (0-100)
+    #[serde(default = "default_alert_threshold")]
+    pub alert_threshold: f64,
+}
+
+impl Default for CostConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pricing: default_pricing(),
+            budget_limit: 0.0,
+            alert_threshold: default_alert_threshold(),
+        }
+    }
+}
+
+fn default_alert_threshold() -> f64 {
+    80.0
+}
+
+fn default_pricing() -> HashMap<String, ModelPricing> {
+    let mut m = HashMap::new();
+    m.insert(
+        "gpt-4o".into(),
+        ModelPricing {
+            prompt_per_1k: 0.0025,
+            completion_per_1k: 0.01,
+        },
+    );
+    m.insert(
+        "gpt-4o-mini".into(),
+        ModelPricing {
+            prompt_per_1k: 0.00015,
+            completion_per_1k: 0.0006,
+        },
+    );
+    m.insert(
+        "gpt-4-turbo".into(),
+        ModelPricing {
+            prompt_per_1k: 0.01,
+            completion_per_1k: 0.03,
+        },
+    );
+    m.insert(
+        "claude-3-opus".into(),
+        ModelPricing {
+            prompt_per_1k: 0.015,
+            completion_per_1k: 0.075,
+        },
+    );
+    m.insert(
+        "claude-3-sonnet".into(),
+        ModelPricing {
+            prompt_per_1k: 0.003,
+            completion_per_1k: 0.015,
+        },
+    );
+    m.insert(
+        "claude-3-haiku".into(),
+        ModelPricing {
+            prompt_per_1k: 0.00025,
+            completion_per_1k: 0.00125,
+        },
+    );
+    m
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelPricing {
+    /// Cost per 1K prompt tokens in USD
+    pub prompt_per_1k: f64,
+    /// Cost per 1K completion tokens in USD
+    pub completion_per_1k: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -610,24 +760,53 @@ impl Config {
 
     /// Validate configuration for basic correctness.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // 1. Ensure at least one API key is present
+        // 1. Ensure at least one API key is present for the configured model
         if self.resolve_provider().is_none() {
+            let model = &self.agents.defaults.model;
             return Err(ConfigError::Other(
-                "No API key found for any provider. Please add an API key (e.g. 'openai') to your config.json or set QUECTOCLAW_PROVIDERS_OPENAI_API_KEY environment variable.".to_string()
+                format!("No API key found for model '{}'. Please add an API key to your config.json or set the corresponding environment variable (e.g. QUECTOCLAW_PROVIDERS_OPENAI_API_KEY).", model)
             ));
         }
 
-        // 2. Validate workspace path (expand tilde if needed and check)
+        // 2. Validate workspace path
         let ws = self.workspace_path().map_err(|_| ConfigError::NoHomeDir)?;
-        if let Some(_parent) = ws.parent() {
-            // We just need it to be a valid path string for now
-        } else {
-            return Err(ConfigError::InvalidWorkspace(ws.to_string_lossy().to_string()));
+
+        // Ensure workspace is not a file
+        if ws.exists() && !ws.is_dir() {
+            return Err(ConfigError::InvalidWorkspace(format!(
+                "Workspace path '{}' exists but is not a directory",
+                ws.display()
+            )));
         }
+
+        // Try to create it if it doesn't exist (to check permissions)
+        if !ws.exists() {
+            if let Err(e) = std::fs::create_dir_all(&ws) {
+                return Err(ConfigError::InvalidWorkspace(format!(
+                    "Failed to create workspace directory '{}': {}",
+                    ws.display(),
+                    e
+                )));
+            }
+        }
+
+        // Check writability by creating a temporary file
+        let test_file = ws.join(".quectoclaw_test");
+        if let Err(e) = std::fs::write(&test_file, "test") {
+            return Err(ConfigError::InvalidWorkspace(format!(
+                "Workspace directory '{}' is not writable: {}",
+                ws.display(),
+                e
+            )));
+        }
+        let _ = std::fs::remove_file(test_file);
 
         // 3. Channel validation if enabled
         if self.channels.telegram.enabled && self.channels.telegram.token.is_empty() {
-             tracing::warn!("Telegram channel is enabled but token is missing");
+            tracing::warn!("Telegram channel is enabled but token is missing");
+        }
+        if self.channels.discord.enabled && self.channels.discord.token.is_empty() {
+            tracing::warn!("Discord channel is enabled but token is missing");
         }
 
         Ok(())

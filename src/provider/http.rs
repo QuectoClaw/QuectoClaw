@@ -100,7 +100,11 @@ impl LLMProvider for HTTPProvider {
         let mut last_error = None;
         for attempt in 0..=max_retries {
             if attempt > 0 {
-                tracing::info!(attempt = attempt, "Retrying LLM request after {}ms delay", retry_delay_ms);
+                tracing::info!(
+                    attempt = attempt,
+                    "Retrying LLM request after {}ms delay",
+                    retry_delay_ms
+                );
                 tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
             }
 
@@ -130,11 +134,18 @@ impl LLMProvider for HTTPProvider {
                     }
 
                     let is_transient = status.is_server_error() || status.as_u16() == 429;
-                    let response_body = response.text().await.unwrap_or_else(|_| "could not read body".to_string());
-                    
+                    let response_body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "could not read body".to_string());
+
                     if is_transient && attempt < max_retries {
                         tracing::warn!(status = %status, attempt = attempt, "Transient LLM API error: {}", response_body);
-                        last_error = Some(anyhow::anyhow!("LLM API error ({}): {}", status, response_body));
+                        last_error = Some(anyhow::anyhow!(
+                            "LLM API error ({}): {}",
+                            status,
+                            response_body
+                        ));
                         continue;
                     } else {
                         anyhow::bail!("LLM API error ({}): {}", status, response_body);
@@ -149,7 +160,9 @@ impl LLMProvider for HTTPProvider {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("LLM request failed after {} attempts", max_retries + 1)))
+        Err(last_error.unwrap_or_else(|| {
+            anyhow::anyhow!("LLM request failed after {} attempts", max_retries + 1)
+        }))
     }
 
     async fn chat_stream(
@@ -193,7 +206,11 @@ impl LLMProvider for HTTPProvider {
         let mut response = None;
         for attempt in 0..=max_retries {
             if attempt > 0 {
-                tracing::info!(attempt = attempt, "Retrying LLM stream request after {}ms delay", retry_delay_ms);
+                tracing::info!(
+                    attempt = attempt,
+                    "Retrying LLM stream request after {}ms delay",
+                    retry_delay_ms
+                );
                 tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
             }
 
@@ -216,7 +233,7 @@ impl LLMProvider for HTTPProvider {
 
                     let is_transient = status.is_server_error() || status.as_u16() == 429;
                     let err_body = resp.text().await.unwrap_or_default();
-                    
+
                     if is_transient && attempt < max_retries {
                         tracing::warn!(status = %status, attempt = attempt, "Transient LLM stream error: {}", err_body);
                         continue;
@@ -238,7 +255,12 @@ impl LLMProvider for HTTPProvider {
             }
         }
 
-        let response = response.ok_or_else(|| anyhow::anyhow!("Failed to connect to LLM stream after {} attempts", max_retries + 1))?;
+        let response = response.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to connect to LLM stream after {} attempts",
+                max_retries + 1
+            )
+        })?;
 
         // Process SSE stream
         process_sse_stream(response, tx).await

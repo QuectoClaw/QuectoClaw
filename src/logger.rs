@@ -1,9 +1,9 @@
 // QuectoClaw — Structured logging via tracing
 
-use tracing_subscriber::{fmt, EnvFilter, Layer, prelude::*};
+use crate::tui::app::{LogLevel, TuiState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use crate::tui::app::{TuiState, LogLevel};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter, Layer};
 
 static DASHBOARD_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TUI_STATE: Mutex<Option<TuiState>> = Mutex::new(None);
@@ -33,9 +33,9 @@ pub fn init() {
             !DASHBOARD_ACTIVE.load(Ordering::Relaxed)
         }));
 
-    let tui_layer = tracing_subscriber::filter::filter_fn(|_| {
-        DASHBOARD_ACTIVE.load(Ordering::Relaxed)
-    }).and_then(InternalTuiLayer);
+    let tui_layer =
+        tracing_subscriber::filter::filter_fn(|_| DASHBOARD_ACTIVE.load(Ordering::Relaxed))
+            .and_then(InternalTuiLayer);
 
     tracing_subscriber::registry()
         .with(filter)
@@ -50,19 +50,23 @@ impl<S> Layer<S> for InternalTuiLayer
 where
     S: tracing::Subscriber,
 {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         if let Ok(state_opt) = TUI_STATE.lock() {
             if let Some(state) = state_opt.as_ref() {
                 let mut visitor = LogVisitor::default();
                 event.record(&mut visitor);
-                
+
                 let level = match *event.metadata().level() {
                     tracing::Level::ERROR => LogLevel::Error,
                     tracing::Level::WARN => LogLevel::Warn,
                     tracing::Level::INFO => LogLevel::Info,
                     _ => LogLevel::Debug,
                 };
-                
+
                 if !visitor.message.is_empty() {
                     state.push_log_sync(level, visitor.message);
                 }
