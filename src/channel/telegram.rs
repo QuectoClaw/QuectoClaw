@@ -55,9 +55,9 @@ mod implementation {
 
             tokio::spawn(async move {
                 let handler = Update::filter_message().endpoint(
-                    |bot: Bot, base: Arc<BaseChannel>, msg: Message| async move {
+                    |_bot: Bot, base: Arc<BaseChannel>, msg: Message| async move {
                         if let Some(text) = msg.text() {
-                            let sender_id = if let Some(user) = msg.from() {
+                            let sender_id = if let Some(user) = &msg.from {
                                 if let Some(username) = &user.username {
                                     format!("{}|{}", user.id, username)
                                 } else {
@@ -104,16 +104,15 @@ mod implementation {
 
             // Format content — convert markdown-ish to something Telegram likes or just send as plain text
             // For now, we'll use MarkdownV2 if possible, or just raw text.
-            self.bot
+            let res = self.bot
                 .send_message(ChatId(chat_id), &msg.content)
-                .parse_mode(ParseMode::MarkdownV2) // This might fail if the LLM output isn't perfect MarkdownV2
-                .send()
-                .await
-                .or_else(|_| {
-                    // Fallback to plain text if MarkdownV2 fails
-                    self.bot.send_message(ChatId(chat_id), &msg.content).send()
-                })
-                .await?;
+                .parse_mode(ParseMode::MarkdownV2)
+                .await;
+
+            if res.is_err() {
+                // Fallback to plain text if MarkdownV2 fails
+                self.bot.send_message(ChatId(chat_id), &msg.content).await?;
+            }
 
             Ok(())
         }

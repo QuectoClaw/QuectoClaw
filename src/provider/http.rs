@@ -69,51 +69,87 @@ impl LLMProvider for HTTPProvider {
         let use_model = if model.is_empty() { &self.model } else { model };
         let url = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
 
-        // Build request body
+        let max_retries = options
+            .get("max_retries")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3) as usize;
+        let retry_delay_ms = options
+            .get("retry_delay_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1000);
+
+        // Build request body once
         let mut body = json!({
             "model": use_model,
             "messages": messages,
         });
 
-        // Add tools if any
         if !tools.is_empty() {
             body["tools"] = serde_json::to_value(tools)?;
         }
 
-        // Apply options
         if let Some(obj) = body.as_object_mut() {
             for (k, v) in options {
-                obj.insert(k.clone(), v.clone());
+                // Don't leak retry config into the API call itself
+                if k != "max_retries" && k != "retry_delay_ms" {
+                    obj.insert(k.clone(), v.clone());
+                }
             }
         }
 
-        tracing::debug!(
-            url = %url,
-            model = %use_model,
-            messages = messages.len(),
-            tools = tools.len(),
-            "Sending LLM request"
-        );
+        let mut last_error = None;
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                tracing::info!(attempt = attempt, "Retrying LLM request after {}ms delay", retry_delay_ms);
+                tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
+            }
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            tracing::debug!(
+                url = %url,
+                model = %use_model,
+                attempt = attempt,
+                "Sending LLM request"
+            );
 
-        let status = response.status();
-        let response_body = response.text().await?;
+            let res = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await;
 
-        if !status.is_success() {
-            anyhow::bail!("LLM API error ({}): {}", status, response_body);
+            match res {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let response_body = response.text().await?;
+                        tracing::debug!(status = %status, body_len = response_body.len(), "LLM response received");
+                        return parse_response(&response_body);
+                    }
+
+                    let is_transient = status.is_server_error() || status.as_u16() == 429;
+                    let response_body = response.text().await.unwrap_or_else(|_| "could not read body".to_string());
+                    
+                    if is_transient && attempt < max_retries {
+                        tracing::warn!(status = %status, attempt = attempt, "Transient LLM API error: {}", response_body);
+                        last_error = Some(anyhow::anyhow!("LLM API error ({}): {}", status, response_body));
+                        continue;
+                    } else {
+                        anyhow::bail!("LLM API error ({}): {}", status, response_body);
+                    }
+                }
+                Err(e) if attempt < max_retries => {
+                    tracing::warn!(error = %e, attempt = attempt, "Network error during LLM request");
+                    last_error = Some(anyhow::Error::from(e));
+                    continue;
+                }
+                Err(e) => return Err(anyhow::Error::from(e)),
+            }
         }
 
-        tracing::debug!(status = %status, body_len = response_body.len(), "LLM response received");
-
-        parse_response(&response_body)
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("LLM request failed after {} attempts", max_retries + 1)))
     }
 
     async fn chat_stream(
@@ -127,6 +163,15 @@ impl LLMProvider for HTTPProvider {
         let use_model = if model.is_empty() { &self.model } else { model };
         let url = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
 
+        let max_retries = options
+            .get("max_retries")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3) as usize;
+        let retry_delay_ms = options
+            .get("retry_delay_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1000);
+
         let mut body = json!({
             "model": use_model,
             "messages": messages,
@@ -139,27 +184,61 @@ impl LLMProvider for HTTPProvider {
 
         if let Some(obj) = body.as_object_mut() {
             for (k, v) in options {
-                obj.insert(k.clone(), v.clone());
+                if k != "max_retries" && k != "retry_delay_ms" {
+                    obj.insert(k.clone(), v.clone());
+                }
             }
         }
 
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let mut response = None;
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                tracing::info!(attempt = attempt, "Retrying LLM stream request after {}ms delay", retry_delay_ms);
+                tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
+            }
 
-        let status = response.status();
-        if !status.is_success() {
-            let err_body = response.text().await.unwrap_or_default();
-            let _ = tx
-                .send(StreamEvent::Error(format!("HTTP {}: {}", status, err_body)))
+            let res = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
                 .await;
-            anyhow::bail!("LLM API error ({}): {}", status, err_body);
+
+            match res {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        response = Some(resp);
+                        break;
+                    }
+
+                    let is_transient = status.is_server_error() || status.as_u16() == 429;
+                    let err_body = resp.text().await.unwrap_or_default();
+                    
+                    if is_transient && attempt < max_retries {
+                        tracing::warn!(status = %status, attempt = attempt, "Transient LLM stream error: {}", err_body);
+                        continue;
+                    } else {
+                        let _ = tx
+                            .send(StreamEvent::Error(format!("HTTP {}: {}", status, err_body)))
+                            .await;
+                        anyhow::bail!("LLM API error ({}): {}", status, err_body);
+                    }
+                }
+                Err(e) if attempt < max_retries => {
+                    tracing::warn!(error = %e, attempt = attempt, "Network error during LLM stream request");
+                    continue;
+                }
+                Err(e) => {
+                    let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                    return Err(anyhow::Error::from(e));
+                }
+            }
         }
+
+        let response = response.ok_or_else(|| anyhow::anyhow!("Failed to connect to LLM stream after {} attempts", max_retries + 1))?;
 
         // Process SSE stream
         process_sse_stream(response, tx).await

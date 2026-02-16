@@ -114,6 +114,12 @@ async fn main() {
 async fn agent_cmd(message: Option<String>, session: String, config_path: Option<String>) {
     let cfg = load_config(config_path.as_deref());
 
+    if let Err(e) = cfg.validate() {
+        eprintln!("{} Configuration Error: {}", LOGO, e);
+        eprintln!("\nRun `quectoclaw onboard` to set up your configuration.");
+        std::process::exit(1);
+    }
+
     let provider = match create_provider(&cfg) {
         Ok(p) => Arc::from(p),
         Err(e) => {
@@ -550,6 +556,11 @@ async fn create_tool_registry(workspace: &str, restrict: bool, cfg: &Config) -> 
 
 async fn gateway_cmd(config_path: Option<String>) {
     let cfg = load_config(config_path.as_deref());
+
+    if let Err(e) = cfg.validate() {
+        eprintln!("{} Configuration Error: {}", LOGO, e);
+        std::process::exit(1);
+    }
 
     let provider = match create_provider(&cfg) {
         Ok(p) => Arc::from(p),

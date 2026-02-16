@@ -15,6 +15,10 @@ pub enum ConfigError {
     Parse(#[from] serde_json::Error),
     #[error("home directory not found")]
     NoHomeDir,
+    #[error("no API key found for any provider")]
+    MissingApiKey,
+    #[error("workspace path is invalid or inaccessible: {0}")]
+    InvalidWorkspace(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +67,10 @@ pub struct AgentDefaults {
     pub temperature: f64,
     #[serde(default = "default_max_tool_iterations")]
     pub max_tool_iterations: usize,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: usize,
+    #[serde(default = "default_retry_delay_ms")]
+    pub retry_delay_ms: u64,
 }
 
 impl Default for AgentDefaults {
@@ -74,8 +82,17 @@ impl Default for AgentDefaults {
             max_tokens: default_max_tokens(),
             temperature: default_temperature(),
             max_tool_iterations: default_max_tool_iterations(),
+            max_retries: default_max_retries(),
+            retry_delay_ms: default_retry_delay_ms(),
         }
     }
+}
+
+fn default_max_retries() -> usize {
+    3
+}
+fn default_retry_delay_ms() -> u64 {
+    1000
 }
 
 fn default_workspace() -> String {
@@ -587,6 +604,29 @@ impl Config {
         }
 
         None
+    }
+
+    /// Validate configuration for basic correctness.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // 1. Ensure at least one API key is present
+        if self.resolve_provider().is_none() {
+            return Err(ConfigError::MissingApiKey);
+        }
+
+        // 2. Validate workspace path (expand tilde if needed and check)
+        let ws = self.workspace_path().map_err(|_| ConfigError::NoHomeDir)?;
+        if let Some(_parent) = ws.parent() {
+            // We just need it to be a valid path string for now
+        } else {
+            return Err(ConfigError::InvalidWorkspace(ws.to_string_lossy().to_string()));
+        }
+
+        // 3. Channel validation if enabled
+        if self.channels.telegram.enabled && self.channels.telegram.token.is_empty() {
+             tracing::warn!("Telegram channel is enabled but token is missing");
+        }
+
+        Ok(())
     }
 }
 

@@ -86,7 +86,7 @@ impl AgentLoop {
     }
 
     /// Core agent loop: build context → call LLM → execute tools → repeat.
-    async fn run_agent_loop(
+    pub async fn run_agent_loop(
         &self,
         user_message: &str,
         session_key: &str,
@@ -135,6 +135,14 @@ impl AgentLoop {
         options.insert(
             "max_tokens".to_string(),
             serde_json::Value::from(self.config.agents.defaults.max_tokens),
+        );
+        options.insert(
+            "max_retries".to_string(),
+            serde_json::Value::from(self.config.agents.defaults.max_retries),
+        );
+        options.insert(
+            "retry_delay_ms".to_string(),
+            serde_json::Value::from(self.config.agents.defaults.retry_delay_ms),
         );
 
         let mut final_content = String::new();
