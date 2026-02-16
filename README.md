@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="QuectoClaw Logo" width="200" />
+  <img src="assets/logo.png" alt="QuectoClaw Logo" width="400" />
 </p>
 
 <h1 align="center">QuectoClaw</h1>
