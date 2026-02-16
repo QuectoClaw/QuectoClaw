@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# QuectoClaw pre-push hook
+# Enable: git config core.hooksPath .githooks
+# Skip:   git push --no-verify
+
+set -euo pipefail
+
+echo "🔍 Running pre-push checks..."
+
+echo "  ▸ cargo fmt --check"
+cargo fmt -- --check || { echo "❌ Format check failed. Run: cargo fmt"; exit 1; }
+
+echo "  ▸ cargo clippy"
+cargo clippy --all-targets -- -D warnings || { echo "❌ Clippy failed."; exit 1; }
+
+echo "  ▸ cargo test"
+cargo test || { echo "❌ Tests failed."; exit 1; }
+
+echo "✅ All pre-push checks passed."

@@ -183,16 +183,16 @@ mod tests {
         store.add_document_with_embedding("1", "doc 1", metadata.clone(), vec![1.0, 0.0]);
         store.add_document_with_embedding("2", "doc 2", metadata.clone(), vec![0.0, 1.0]);
 
-        let results = store.search_by_embedding(&vec![1.0, 0.1], 1);
+        let results = store.search_by_embedding(&[1.0, 0.1], 1);
         assert_eq!(results[0].id, "1");
     }
 
     #[test]
     fn test_cosine_similarity() {
-        let sim = cosine_similarity(&vec![1.0, 0.0], &vec![1.0, 0.0]);
+        let sim = cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]);
         assert!((sim - 1.0).abs() < 0.001);
 
-        let sim = cosine_similarity(&vec![1.0, 0.0], &vec![0.0, 1.0]);
+        let sim = cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]);
         assert!(sim.abs() < 0.001);
     }
 }

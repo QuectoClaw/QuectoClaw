@@ -35,6 +35,7 @@ regex = "1"
 dirs = "6"
 thiserror = "2"
 anyhow = "1"
+url = "2"
 
 # Interactive readline
 rustyline = "15"

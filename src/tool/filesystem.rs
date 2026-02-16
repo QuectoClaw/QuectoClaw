@@ -11,6 +11,11 @@ use std::path::{Path, PathBuf};
 // ---------------------------------------------------------------------------
 
 fn validate_path(path: &str, workspace: &str, restrict: bool) -> Result<PathBuf, String> {
+    // Block null byte injection
+    if path.contains('\0') || workspace.contains('\0') {
+        return Err("access denied: null byte in path".into());
+    }
+
     if workspace.is_empty() {
         return Ok(PathBuf::from(path));
     }
@@ -25,8 +30,21 @@ fn validate_path(path: &str, workspace: &str, restrict: bool) -> Result<PathBuf,
         abs_workspace.join(path)
     };
 
-    // Normalize the path (resolve . and ..)
-    let abs_path = abs_path.canonicalize().unwrap_or_else(|_| abs_path.clone());
+    // Try canonicalize first; if that fails (file doesn't exist yet),
+    // manually resolve '..' components to prevent path traversal bypass.
+    let abs_path = abs_path.canonicalize().unwrap_or_else(|_| {
+        let mut components = Vec::new();
+        for component in abs_path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    components.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => components.push(other),
+            }
+        }
+        components.iter().collect()
+    });
 
     if restrict && !abs_path.starts_with(&abs_workspace) {
         return Err("access denied: path is outside the workspace".into());
@@ -391,5 +409,19 @@ mod tests {
     fn test_validate_path_unrestricted() {
         let result = validate_path("/etc/passwd", "/tmp", false);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_path_null_byte() {
+        let result = validate_path("/tmp/file\0.txt", "/tmp", true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("null byte"));
+    }
+
+    #[test]
+    fn test_validate_path_dotdot_traversal_nonexistent() {
+        // Even for non-existent files, '..' components should be resolved
+        let result = validate_path("/tmp/foo/../../etc/passwd", "/tmp", true);
+        assert!(result.is_err());
     }
 }

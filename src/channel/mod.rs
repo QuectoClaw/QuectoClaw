@@ -36,8 +36,15 @@ impl BaseChannel {
     }
 
     /// Check if a sender is allowed to use this channel.
+    /// Empty allowlist = deny all (secure by default).
+    /// Use `["*"]` to explicitly allow all senders.
     pub fn is_allowed(&self, sender_id: &str) -> bool {
         if self.allow_list.is_empty() {
+            return false; // deny-all by default — secure posture
+        }
+
+        // Wildcard: explicit opt-in to allow everyone
+        if self.allow_list.iter().any(|a| a == "*") {
             return true;
         }
 
@@ -117,9 +124,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_allow_list_empty() {
+    fn test_allow_list_empty_denies_all() {
         let bus = Arc::new(MessageBus::new());
         let ch = BaseChannel::new("test", vec![], bus);
+        assert!(!ch.is_allowed("anyone"));
+    }
+
+    #[test]
+    fn test_allow_list_wildcard_allows_all() {
+        let bus = Arc::new(MessageBus::new());
+        let ch = BaseChannel::new("test", vec!["*".into()], bus);
         assert!(ch.is_allowed("anyone"));
     }
 

@@ -157,6 +157,7 @@ pub struct TelegramConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub token: String,
     #[serde(default)]
     pub proxy: String,
@@ -169,6 +170,7 @@ pub struct DiscordConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub token: String,
     #[serde(default)]
     pub allow_from: Vec<String>,
@@ -179,8 +181,10 @@ pub struct SlackConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub bot_token: String,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub app_token: String,
     #[serde(default)]
     pub allow_from: Vec<String>,
@@ -203,10 +207,13 @@ pub struct FeishuConfig {
     #[serde(default)]
     pub app_id: String,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub app_secret: String,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub encrypt_key: String,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub verification_token: String,
     #[serde(default)]
     pub allow_from: Vec<String>,
@@ -219,6 +226,7 @@ pub struct DingTalkConfig {
     #[serde(default)]
     pub client_id: String,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub client_secret: String,
     #[serde(default)]
     pub allow_from: Vec<String>,
@@ -229,8 +237,10 @@ pub struct LineConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub channel_secret: String,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub channel_access_token: String,
     #[serde(default)]
     pub webhook_host: String,
@@ -253,6 +263,7 @@ pub struct OneBotConfig {
     #[serde(default)]
     pub ws_url: String,
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub access_token: String,
     #[serde(default = "default_reconnect")]
     pub reconnect_interval: u64,
@@ -311,22 +322,54 @@ pub struct ProvidersConfig {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct ProviderEntry {
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub api_key: String,
     #[serde(default)]
     pub api_base: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+impl std::fmt::Debug for ProviderEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderEntry")
+            .field("api_key", &mask_secret(&self.api_key))
+            .field("api_base", &self.api_base)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct ProviderEntryWithProxy {
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub api_key: String,
     #[serde(default)]
     pub api_base: String,
     #[serde(default)]
     pub proxy: String,
+}
+
+impl std::fmt::Debug for ProviderEntryWithProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderEntryWithProxy")
+            .field("api_key", &mask_secret(&self.api_key))
+            .field("api_base", &self.api_base)
+            .field("proxy", &self.proxy)
+            .finish()
+    }
+}
+
+/// Mask a secret string for safe display: show first 4 chars + "***" or "(empty)".
+fn mask_secret(s: &str) -> String {
+    if s.is_empty() {
+        "(empty)".into()
+    } else if s.len() <= 4 {
+        "***".into()
+    } else {
+        format!("{}***", &s[..4])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +386,13 @@ pub struct GatewayConfig {
     pub rate_limit_requests: u64,
     #[serde(default = "default_rate_limit_seconds")]
     pub rate_limit_seconds: u64,
+    /// Whether to allow binding to 0.0.0.0 (public). Default: false.
+    #[serde(default)]
+    pub allow_public_bind: bool,
+    /// Bearer token for web dashboard API. Auto-generated if empty.
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    pub dashboard_token: String,
 }
 
 impl Default for GatewayConfig {
@@ -352,12 +402,14 @@ impl Default for GatewayConfig {
             port: default_gateway_port(),
             rate_limit_requests: default_rate_limit_requests(),
             rate_limit_seconds: default_rate_limit_seconds(),
+            allow_public_bind: false,
+            dashboard_token: String::new(),
         }
     }
 }
 
 fn default_gateway_host() -> String {
-    "0.0.0.0".to_string()
+    "127.0.0.1".to_string()
 }
 fn default_gateway_port() -> u16 {
     18790
@@ -377,6 +429,29 @@ fn default_rate_limit_seconds() -> u64 {
 pub struct ToolsConfig {
     #[serde(default)]
     pub web: WebToolsConfig,
+    /// Allowlist of commands the exec tool may run (empty = allow all — NOT recommended).
+    #[serde(default)]
+    pub allowed_commands: Vec<String>,
+    /// Paths that are always blocked for filesystem and exec tools.
+    #[serde(default = "default_forbidden_paths")]
+    pub forbidden_paths: Vec<String>,
+}
+
+fn default_forbidden_paths() -> Vec<String> {
+    vec![
+        "/etc".into(),
+        "/root".into(),
+        "/proc".into(),
+        "/sys".into(),
+        "/dev".into(),
+        "/boot".into(),
+        "/sbin".into(),
+        "/usr/sbin".into(),
+        "~/.ssh".into(),
+        "~/.gnupg".into(),
+        "~/.aws".into(),
+        "~/.config/gcloud".into(),
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -388,6 +463,7 @@ pub struct WebToolsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WebSearchConfig {
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub api_key: String,
     #[serde(default = "default_max_results")]
     pub max_results: usize,

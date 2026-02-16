@@ -14,10 +14,17 @@ pub struct ExecTool {
     timeout: Duration,
     deny_patterns: Vec<Regex>,
     restrict_to_workspace: bool,
+    allowed_commands: Vec<String>,
+    forbidden_paths: Vec<String>,
 }
 
 impl ExecTool {
-    pub fn new(working_dir: String, restrict: bool) -> Self {
+    pub fn new(
+        working_dir: String,
+        restrict: bool,
+        allowed_commands: Vec<String>,
+        forbidden_paths: Vec<String>,
+    ) -> Self {
         let deny_patterns = vec![
             Regex::new(r"\brm\s+-[rf]{1,2}\b").unwrap(),
             Regex::new(r"\bdel\s+/[fq]\b").unwrap(),
@@ -34,18 +41,76 @@ impl ExecTool {
             timeout: Duration::from_secs(60),
             deny_patterns,
             restrict_to_workspace: restrict,
+            allowed_commands,
+            forbidden_paths,
         }
     }
 
+    /// Resolve forbidden path entries (expand ~ to home dir).
+    fn resolve_forbidden_paths(&self) -> Vec<PathBuf> {
+        let home = dirs::home_dir();
+        self.forbidden_paths
+            .iter()
+            .map(|p| {
+                if let Some(stripped) = p.strip_prefix("~/") {
+                    if let Some(ref h) = home {
+                        return h.join(stripped);
+                    }
+                }
+                PathBuf::from(p)
+            })
+            .collect()
+    }
+
     fn guard_command(&self, command: &str, cwd: &str) -> Option<String> {
+        // Reject null bytes (injection vector)
+        if command.contains('\0') || cwd.contains('\0') {
+            return Some("Command blocked: null byte detected".into());
+        }
+
         let lower = command.to_lowercase();
 
+        // --- Allowlist gate (primary) ---
+        if !self.allowed_commands.is_empty() {
+            // Extract the first token (the program name)
+            let first_token = command
+                .split(|c: char| c.is_whitespace() || c == ';' || c == '|' || c == '&')
+                .find(|s| !s.is_empty())
+                .unwrap_or("");
+
+            // Also check after any env-var assignments (e.g. FOO=bar cmd)
+            let program = if first_token.contains('=') {
+                command
+                    .split_whitespace()
+                    .find(|t| !t.contains('='))
+                    .unwrap_or(first_token)
+            } else {
+                first_token
+            };
+
+            // Extract basename (strip path)
+            let basename = program.rsplit('/').next().unwrap_or(program);
+
+            if !self
+                .allowed_commands
+                .iter()
+                .any(|a| a == basename || a == program)
+            {
+                return Some(format!(
+                    "Command blocked: '{}' is not in the allowed commands list. Allowed: {:?}",
+                    basename, self.allowed_commands
+                ));
+            }
+        }
+
+        // --- Deny-list gate (secondary defense-in-depth) ---
         for pattern in &self.deny_patterns {
             if pattern.is_match(&lower) {
                 return Some("Command blocked by safety guard (dangerous pattern detected)".into());
             }
         }
 
+        // --- Workspace restriction ---
         if self.restrict_to_workspace {
             if command.contains("../") || command.contains("..\\") {
                 return Some("Command blocked by safety guard (path traversal detected)".into());
@@ -69,9 +134,27 @@ impl ExecTool {
             }
         }
 
+        // --- Forbidden paths check ---
+        let forbidden = self.resolve_forbidden_paths();
+        let path_re = Regex::new(r"[A-Za-z]:\\[^\\\x22']+|/[^\s\x22']+").unwrap();
+        for raw in path_re.find_iter(command) {
+            let raw_path = std::path::Path::new(raw.as_str());
+            let resolved = raw_path.canonicalize().unwrap_or_else(|_| raw_path.to_path_buf());
+            for fp in &forbidden {
+                if resolved.starts_with(fp) {
+                    return Some(format!(
+                        "Command blocked: accesses forbidden path '{}'",
+                        fp.display()
+                    ));
+                }
+            }
+        }
+
         None
     }
 }
+
+use std::path::PathBuf;
 
 #[async_trait]
 impl Tool for ExecTool {
@@ -111,6 +194,24 @@ impl Tool for ExecTool {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.working_dir);
+
+        // Validate working_dir against workspace boundary
+        if self.restrict_to_workspace {
+            if cwd.contains('\0') {
+                return ToolResult::error("working_dir blocked: null byte detected");
+            }
+            if let Ok(workspace_abs) = std::path::Path::new(&self.working_dir).canonicalize() {
+                let cwd_path = std::path::Path::new(cwd);
+                let cwd_resolved = cwd_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| cwd_path.to_path_buf());
+                if !cwd_resolved.starts_with(&workspace_abs) {
+                    return ToolResult::error(
+                        "working_dir blocked: path is outside the workspace",
+                    );
+                }
+            }
+        }
 
         if let Some(err) = self.guard_command(command, cwd) {
             return ToolResult::error(err);
@@ -164,9 +265,22 @@ impl Tool for ExecTool {
 mod tests {
     use super::*;
 
+    fn make_tool(restrict: bool) -> ExecTool {
+        ExecTool::new("/tmp".into(), restrict, vec![], vec![])
+    }
+
+    fn make_tool_with_allowlist(cmds: Vec<&str>) -> ExecTool {
+        ExecTool::new(
+            "/tmp".into(),
+            false,
+            cmds.into_iter().map(String::from).collect(),
+            vec![],
+        )
+    }
+
     #[test]
     fn test_guard_dangerous_commands() {
-        let tool = ExecTool::new("/tmp".into(), false);
+        let tool = make_tool(false);
         assert!(tool.guard_command("rm -rf /", "/tmp").is_some());
         assert!(tool.guard_command("shutdown now", "/tmp").is_some());
         assert!(tool.guard_command("dd if=/dev/zero", "/tmp").is_some());
@@ -175,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_guard_safe_commands() {
-        let tool = ExecTool::new("/tmp".into(), false);
+        let tool = make_tool(false);
         assert!(tool.guard_command("ls -la", "/tmp").is_none());
         assert!(tool.guard_command("cat file.txt", "/tmp").is_none());
         assert!(tool.guard_command("echo hello", "/tmp").is_none());
@@ -183,15 +297,47 @@ mod tests {
 
     #[test]
     fn test_guard_path_traversal() {
-        let tool = ExecTool::new("/tmp".into(), true);
+        let tool = make_tool(true);
         assert!(tool
             .guard_command("cat ../../../etc/passwd", "/tmp")
             .is_some());
     }
 
+    #[test]
+    fn test_guard_null_byte() {
+        let tool = make_tool(false);
+        assert!(tool.guard_command("cat file\0.txt", "/tmp").is_some());
+    }
+
+    #[test]
+    fn test_allowlist_blocks_unlisted() {
+        let tool = make_tool_with_allowlist(vec!["ls", "cat", "echo"]);
+        assert!(tool.guard_command("curl http://evil.com", "/tmp").is_some());
+        assert!(tool.guard_command("wget http://evil.com", "/tmp").is_some());
+    }
+
+    #[test]
+    fn test_allowlist_permits_listed() {
+        let tool = make_tool_with_allowlist(vec!["ls", "cat", "echo"]);
+        assert!(tool.guard_command("ls -la", "/tmp").is_none());
+        assert!(tool.guard_command("cat file.txt", "/tmp").is_none());
+        assert!(tool.guard_command("echo hello", "/tmp").is_none());
+    }
+
+    #[test]
+    fn test_forbidden_paths() {
+        let tool = ExecTool::new(
+            "/tmp".into(),
+            false,
+            vec![],
+            vec!["/etc".into(), "/root".into()],
+        );
+        assert!(tool.guard_command("cat /etc/passwd", "/tmp").is_some());
+    }
+
     #[tokio::test]
     async fn test_exec_echo() {
-        let tool = ExecTool::new("/tmp".into(), false);
+        let tool = make_tool(false);
         let mut args = HashMap::new();
         args.insert("command".into(), Value::String("echo hello".into()));
         let result = tool.execute(args).await;

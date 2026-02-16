@@ -68,7 +68,7 @@ impl Tool for PluginTool {
     }
 
     async fn execute(&self, args: HashMap<String, Value>) -> ToolResult {
-        // Substitute {{param}} in command
+        // Substitute {{param}} in command with proper shell escaping
         let mut resolved = self.config.command.clone();
         for (key, val) in &args {
             let placeholder = format!("{{{{{}}}}}", key);
@@ -76,7 +76,9 @@ impl Tool for PluginTool {
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
-            resolved = resolved.replace(&placeholder, &value_str);
+            // Shell-escape: wrap in single quotes, escaping any embedded single quotes
+            let escaped = format!("'{}'", value_str.replace('\'', "'\\''"));
+            resolved = resolved.replace(&placeholder, &escaped);
         }
 
         // Execute shell command

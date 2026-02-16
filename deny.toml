@@ -1,0 +1,60 @@
+# QuectoClaw — cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+all-features = true
+
+# ---------------------------------------------------------------------------
+# Advisories — check for known vulnerabilities in dependencies
+# ---------------------------------------------------------------------------
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+ignore = []
+
+# ---------------------------------------------------------------------------
+# Licenses — enforce allowed license set
+# ---------------------------------------------------------------------------
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+copyleft = "deny"
+default = "deny"
+confidence-threshold = 0.8
+
+[[licenses.exceptions]]
+allow = ["Unicode-3.0"]
+name = "unicode-ident"
+
+# ---------------------------------------------------------------------------
+# Bans — detect duplicate or unwanted crates
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+# ---------------------------------------------------------------------------
+# Sources — restrict to crates.io (no untrusted registries)
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

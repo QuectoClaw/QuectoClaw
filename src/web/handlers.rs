@@ -5,6 +5,15 @@ use axum::extract::State;
 use axum::response::{Html, Json};
 use std::sync::Arc;
 
+/// Escape HTML special characters to prevent XSS.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 /// Dashboard HTML page (full page with HTMX).
 pub async fn dashboard(State(_state): State<Arc<WebState>>) -> Html<String> {
     Html(super::templates::DASHBOARD_HTML.to_string())
@@ -66,7 +75,10 @@ pub async fn fragment_metrics(State(state): State<Arc<WebState>>) -> Html<String
     for ts in &report.tool_stats {
         tool_rows.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}ms</td></tr>",
-            ts.name, ts.calls, ts.errors, ts.avg_ms
+            html_escape(&ts.name),
+            ts.calls,
+            ts.errors,
+            ts.avg_ms
         ));
     }
 
@@ -75,7 +87,9 @@ pub async fn fragment_metrics(State(state): State<Arc<WebState>>) -> Html<String
         let cost = report.model_costs.get(model).copied().unwrap_or(0.0);
         model_rows.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td>${:.4}</td></tr>",
-            model, count, cost
+            html_escape(model),
+            count,
+            cost
         ));
     }
 

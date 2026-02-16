@@ -651,7 +651,12 @@ async fn create_tool_registry(
 
     // We can't register tools inside the registry synchronously, so we build them here.
     let tools: Vec<Arc<dyn quectoclaw::tool::Tool>> = vec![
-        Arc::new(ExecTool::new(workspace.to_string(), restrict)),
+        Arc::new(ExecTool::new(
+            workspace.to_string(),
+            restrict,
+            cfg.tools.allowed_commands.clone(),
+            cfg.tools.forbidden_paths.clone(),
+        )),
         Arc::new(ReadFileTool::new(workspace.to_string(), restrict)),
         Arc::new(WriteFileTool::new(workspace.to_string(), restrict)),
         Arc::new(ListDirTool::new(workspace.to_string(), restrict)),

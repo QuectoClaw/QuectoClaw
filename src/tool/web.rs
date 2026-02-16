@@ -238,6 +238,12 @@ impl Tool for WebFetchTool {
             Some(u) => u,
             None => return ToolResult::error("url is required"),
         };
+
+        // SSRF protection: block private/internal URLs
+        if let Err(reason) = validate_url_ssrf(url) {
+            return ToolResult::error(format!("URL blocked (SSRF protection): {}", reason));
+        }
+
         let max = args
             .get("max_chars")
             .and_then(|v| v.as_u64())
@@ -307,4 +313,129 @@ fn extract_text(html: &str) -> String {
         .replace("&nbsp;", " ")
         .trim()
         .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// SSRF Protection
+// ---------------------------------------------------------------------------
+
+/// Validate a URL is not targeting private/internal network addresses.
+fn validate_url_ssrf(url: &str) -> Result<(), &'static str> {
+    use std::net::IpAddr;
+
+    let parsed = match url::Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return Err("invalid URL"),
+    };
+
+    // Only allow http/https schemes
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return Err("only http/https schemes allowed"),
+    }
+
+    let host = match parsed.host_str() {
+        Some(h) => h,
+        None => return Err("URL has no host"),
+    };
+
+    // Block common internal hostnames
+    let lower_host = host.to_lowercase();
+    if lower_host == "localhost"
+        || lower_host == "metadata.google.internal"
+        || lower_host.ends_with(".internal")
+        || lower_host.ends_with(".local")
+    {
+        return Err("internal/private hostname blocked");
+    }
+
+    // Try to parse as IP address and check private ranges
+    // Use the url crate's Host enum which already handles IPv4/IPv6 parsing
+    match parsed.host() {
+        Some(url::Host::Ipv4(v4)) => {
+            if is_private_ip(&std::net::IpAddr::V4(v4)) {
+                return Err("private/reserved IP address blocked");
+            }
+        }
+        Some(url::Host::Ipv6(v6)) => {
+            if is_private_ip(&std::net::IpAddr::V6(v6)) {
+                return Err("private/reserved IP address blocked");
+            }
+        }
+        _ => {
+            // Also try fallback string parse for edge cases
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                if is_private_ip(&ip) {
+                    return Err("private/reserved IP address blocked");
+                }
+            }
+        }
+    }
+
+    // Also check for IPv4-mapped hostnames like 127.0.0.1, 0.0.0.0, etc.
+    // that could be encoded differently (e.g., 0x7f000001, 2130706433)
+    if host.starts_with("0x") || host.chars().all(|c| c.is_ascii_digit()) {
+        return Err("numeric IP encoding blocked");
+    }
+
+    Ok(())
+}
+
+/// Check if an IP address is private, loopback, link-local, or otherwise reserved.
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()                             // 127.0.0.0/8
+                || v4.is_private()                       // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                || v4.is_link_local()                    // 169.254.0.0/16
+                || v4.is_broadcast()                     // 255.255.255.255
+                || v4.is_unspecified()                   // 0.0.0.0
+                || v4.octets()[0] == 169 && v4.octets()[1] == 254  // cloud metadata 169.254.169.254
+                || v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64 // CGNAT 100.64.0.0/10
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()                             // ::1
+                || v6.is_unspecified()                   // ::
+                || v6.segments()[0] == 0xfe80            // link-local
+                || v6.segments()[0] == 0xfc00            // unique local
+                || v6.segments()[0] == 0xfd00            // unique local
+        }
+    }
+}
+
+#[cfg(test)]
+mod ssrf_tests {
+    use super::*;
+
+    #[test]
+    fn test_ssrf_blocks_localhost() {
+        assert!(validate_url_ssrf("http://localhost/secret").is_err());
+        assert!(validate_url_ssrf("http://127.0.0.1/secret").is_err());
+        assert!(validate_url_ssrf("http://[::1]/secret").is_err());
+    }
+
+    #[test]
+    fn test_ssrf_blocks_private_ips() {
+        assert!(validate_url_ssrf("http://10.0.0.1/admin").is_err());
+        assert!(validate_url_ssrf("http://172.16.0.1/admin").is_err());
+        assert!(validate_url_ssrf("http://192.168.1.1/admin").is_err());
+    }
+
+    #[test]
+    fn test_ssrf_blocks_metadata() {
+        assert!(validate_url_ssrf("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(validate_url_ssrf("http://metadata.google.internal/").is_err());
+    }
+
+    #[test]
+    fn test_ssrf_allows_public() {
+        assert!(validate_url_ssrf("https://example.com").is_ok());
+        assert!(validate_url_ssrf("https://api.github.com").is_ok());
+    }
+
+    #[test]
+    fn test_ssrf_blocks_non_http() {
+        assert!(validate_url_ssrf("ftp://example.com/file").is_err());
+        assert!(validate_url_ssrf("file:///etc/passwd").is_err());
+    }
 }

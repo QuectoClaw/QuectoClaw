@@ -90,7 +90,7 @@ async fn test_agent_integration_with_tool() {
 
     let registry = ToolRegistry::new();
     registry
-        .register(Arc::new(ExecTool::new(ws_path, false)))
+        .register(Arc::new(ExecTool::new(ws_path, false, vec![], vec![])))
         .await;
 
     let bus = Arc::new(MessageBus::new());

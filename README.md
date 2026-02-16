@@ -5,256 +5,241 @@
 <h1 align="center">QuectoClaw</h1>
 
 <p align="center">
-  <strong>Ultra-efficient AI coding assistant — built in Rust 🦀</strong>
+  <strong>Ultra-efficient AI Coding Assistant — Built in Rust 🦀</strong>
 </p>
 
 <p align="center">
-  <a href="#features"><img src="https://img.shields.io/badge/tools-9%20built--in-cyan" alt="Tools" /></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/binary-<5MB-orange" alt="Size" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License" /></a>
-  <a href="#testing"><img src="https://img.shields.io/badge/tests-23%20passing-green" alt="Tests" /></a>
+  <a href="#features"><img src="https://img.shields.io/badge/Tools-12%2B-blue?style=flat-square" alt="Tools" /></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/Binary-<5MB-success?style=flat-square" alt="Size" /></a>
+  <a href="#mcp-support"><img src="https://img.shields.io/badge/MCP-Supported-orange?style=flat-square" alt="MCP Ready" /></a>
+  <a href="#wasm-plugins"><img src="https://img.shields.io/badge/Plugins-WASM%20%26%20JSON-purple?style=flat-square" alt="WASM Plugins" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-lightgrey?style=flat-square" alt="License" /></a>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#configuration">Configuration</a> •
+  <a href="#roadmap">Roadmap</a>
 </p>
 
 ---
 
-## What is QuectoClaw?
+## 🚀 Overview
 
-QuectoClaw is a **self-contained AI assistant** that connects to any OpenAI-compatible API and equips the model with powerful tools — file editing, shell execution, web search, sub-agents, and more. It features **real-time streaming**, **conversation branching**, a **TUI dashboard**, and a **plugin system** for extensibility.
+**QuectoClaw** is a high-performance, self-contained AI agentic coding assistant designed for speed and flexibility. Unlike heavy Python/Node.js alternatives, QuectoClaw compiles to a single **<5MB binary** with **zero runtime dependencies**.
 
-```
-You: Build a REST API with health check and user endpoints
+It connects to any **OpenAI-compatible LLM** (OpenAI, Anthropic, Ollama, Groq) and orchestrates a powerful loop of tools, sub-agents, and plugins to solve complex tasks—from coding and debugging to research and system automation.
 
-🤖 ← streaming tokens in real-time...
+### Why QuectoClaw?
 
-I'll set up the project structure and implement the endpoints.
-
-⚙ Calling exec: cargo init --name api
-⚙ Calling write_file: src/main.rs
-⚙ Calling exec: cargo build
-
-✓ Done! The API is ready at src/main.rs with:
-  - GET /health — returns status
-  - GET /users — lists users
-  - POST /users — creates user
-```
+- **⚡ Blazing Fast**: Rust-based architecture with async I/O and minimal memory footprint.
+- **🔌 Universal Connectivity**: First-class support for **Model Context Protocol (MCP)** and OpenAI API standards.
+- **🛡️ Secure & Auditable**: Built-in tamper-proof **Audit Logging** and sandboxed execution.
+- **🧩 Extensible**: Drop-in **WASM** and JSON plugins, plus a YAML-based workflow engine.
+- **🖥️ Multi-Interface**: Interactive **CLI**, **TUI Dashboard**, **Web UI**, and **Telegram/Discord** Gateway.
 
 ---
 
-## Features
-
-### 🧠 Intelligent Agent Loop
-- Multi-iteration tool-use with configurable depth
-- Automatic conversation summarization for long sessions
-- Hierarchical sub-agents for complex tasks
-
-### ⚡ Real-Time Streaming
-- Server-Sent Events (SSE) for token-by-token output
-- Live tool call indicators in the terminal
-- Non-blocking async architecture
-
-### 🛠️ 9 Built-in Tools
-| Tool | Description |
-|------|-------------|
-| `exec` | Safe shell execution with command guards |
-| `read_file` | Read files with line-range support |
-| `write_file` | Create or overwrite files |
-| `edit_file` | Surgical find-and-replace |
-| `append_file` | Append content to files |
-| `list_dir` | Recursive directory listing |
-| `web_search` | Search the web via API |
-| `web_fetch` | Fetch and parse web pages |
-| `subagent` | Spawn focused sub-agents |
-
-### 🔌 Plugin System
-Extend QuectoClaw with custom tools — just drop a JSON file in `plugins/`:
-
-```json
-{
-  "name": "docker_ps",
-  "description": "List running Docker containers",
-  "command": "docker ps --format '{{.Names}}: {{.Status}}'",
-  "parameters": [],
-  "timeout": 10
-}
-```
-
-### ✂️ Conversation Branching
-```
-> /fork experiment-branch
-✂️  Forked session to: experiment-branch
-   (Restart with --session experiment-branch to use it)
-
-> /metrics
-═══ QuectoClaw Metrics ═══
-Uptime:       00:12:34
-LLM Requests: 8
-Tokens:       12,450 (prompt: 9,200, completion: 3,250)
-Tool Calls:   15 (0 errors)
-```
-
-### 📊 TUI Monitoring Dashboard
-```bash
-quectoclaw dashboard
-```
-Real-time terminal dashboard with:
-- Live stats (requests, tokens, tool calls, errors)
-- Active session tracking
-- Scrolling activity log with color-coded levels
-- Keyboard shortcuts (`q` quit, `c` clear logs)
-
-### 📡 Multi-Channel Gateway
-Deploy as a service that connects to messaging platforms:
-- **Telegram** (via teloxide)
-- **Discord** (via serenity)
-- **Slack** (webhook stub)
-
-```bash
-quectoclaw gateway
-```
-
----
-
-## Installation
+## 📦 Installation
 
 ### From Source
 
+Ensure you have Rust installed (`cargo`).
+
 ```bash
+# Clone the repository
 git clone https://github.com/your-username/QuectoClaw.git
 cd QuectoClaw
+
+# Build optimized release binary
 cargo build --release
 ```
 
-The optimized binary will be at `target/release/quectoclaw` (< 5 MB).
+The binary will be available at `target/release/quectoclaw`.
 
-### With Channel Support
+### Feature Flags
+
+Enable additional capabilities during build:
 
 ```bash
-# Telegram support
-cargo build --release --features telegram
+# Enable WASM Plugin Runtime
+cargo build --release --features wasm
 
-# Discord support
-cargo build --release --features discord
-
-# Both
+# Enable Telegram & Discord Gateway
 cargo build --release --features "telegram,discord"
+
+# Enable All Features
+cargo build --release --all-features
 ```
 
 ---
 
-## Quick Start
+## ⚡ Quick Start
 
 ### 1. Initialize
+
+Run the onboarding wizard to set up your configuration and workspace:
 
 ```bash
 quectoclaw onboard
 ```
+*Creates `~/.quectoclaw/config.json` and workspace templates.*
 
-This creates `~/.quectoclaw/config.json` — add your API key there.
+### 2. Configure
 
-### 2. Chat
+Edit `~/.quectoclaw/config.json` to add your LLM API key:
 
-```bash
-# Interactive mode (default)
-quectoclaw
-
-# One-shot mode
-quectoclaw agent -m "Explain this Rust project's architecture"
-
-# With a specific session
-quectoclaw agent -s my-project -m "Add unit tests"
+```json
+"providers": {
+  "openai": {
+    "api_key": "sk-your-key-here",
+    "api_base": "https://api.openai.com/v1"
+  }
+}
 ```
 
-### 3. Monitor
+### 3. Run
 
+**Interactive Agent Mode:**
 ```bash
-# Check status
-quectoclaw status
+quectoclaw
+```
 
-# Launch TUI dashboard
-quectoclaw dashboard
+**One-Shot Command:**
+```bash
+quectoclaw agent -m "Analyze the src/ dir and explain the architecture"
+```
 
-# Run the gateway
-quectoclaw gateway
+**Workflow Automation:**
+```bash
+quectoclaw run ./workflows/audit-codebase.yaml
 ```
 
 ---
 
-## Configuration
+## ✨ Features
 
-Create or edit `~/.quectoclaw/config.json`:
+### 🛠️ Powerful Tool Suite
+QuectoClaw comes with a robust set of built-in tools:
+| Category | Tools | Description |
+|----------|-------|-------------|
+| **System** | `exec`, `list_dir` | Safe shell execution and recursive directory listing. |
+| **Filesystem** | `read_file`, `write_file`, `edit_file`, `append_file` | Full file manipulation with surgical editing capabilities. |
+| **Web** | `web_search`, `web_fetch` | Live internet access via search APIs and content fetching. |
+| **Memory** | `vectordb_index`, `vectordb_search` | RAG-powered long-term memory for semantic context. |
+| **Meta** | `subagent` | Spawns hierarchical sub-agents for complex task delegation. |
 
+### 🔌 MCP Support (Model Context Protocol)
+Connect standard MCP servers to extend QuectoClaw's capabilities instantly.
+
+*Config example:*
 ```json
-{
-  "provider": {
-    "name": "openai",
-    "api_key": "sk-your-key-here",
-    "base_url": "https://api.openai.com/v1",
-    "default_model": "gpt-4o"
-  },
-  "workspace": "~/.quectoclaw/workspace",
-  "agents": {
-    "defaults": {
-      "model": "gpt-4o",
-      "max_tokens": 4096,
-      "temperature": 0.7,
-      "max_tool_iterations": 25,
-      "restrict_to_workspace": true
+"mcp": {
+  "servers": {
+    "sqlite": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "test.db"]
     }
   }
 }
 ```
 
-> **Compatible providers**: OpenAI, Anthropic (via proxy), Ollama, LM Studio, OpenRouter, Groq — any OpenAI-compatible endpoint.
+### 🧩 WASM & JSON Plugins
+Extend the agent without recompiling.
+- **WASM Plugins**: Python/JS/Rust code compiled to WASM for sandboxed execution (`workspace/wasm_plugins`).
+- **JSON Plugins**: Simple command wrappers (`workspace/plugins`).
 
----
+### 📊 TUI Dashboard & Web UI
+Monitor your agent in real-time.
 
-## Architecture
-
-```
-CLI / TUI ─── AgentLoop ─── Provider (HTTP + SSE)
-                  │
-          ┌───────┼───────┐
-        Tools   Sessions  Metrics
-          │
-   ┌──────┼──────┐
- exec   fs/web  plugins
-```
-
-See [plan.md](plan.md) for the full architecture documentation, module map, and future roadmap.
-
----
-
-## Testing
-
+**Terminal Dashboard:**
 ```bash
-cargo test            # 23 tests
-cargo clippy -- -D warnings   # Zero-warning policy
-cargo fmt             # Consistent formatting
+quectoclaw dashboard
+```
+
+**Web Interface:**
+```bash
+quectoclaw webui --port 3000
+```
+
+### 📜 Robust Audit Logging
+Enterprise-grade audit trails for every action.
+```bash
+# View recent logs
+quectoclaw audit --limit 50
+
+# Follow live logs
+quectoclaw audit --follow
 ```
 
 ---
 
-## Roadmap
+## 🏗️ Architecture
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| 1-5 | Core foundation, tools, agent loop, channels, CLI | ✅ Complete |
-| 6 | Streaming, branching, plugins, TUI, metrics | ✅ Complete |
-| 7 | Integration tests, error resilience, rate limiting | 🔜 Next |
-| 8 | Vector DB, MCP, Web UI, multi-model routing | 📋 Planned |
-| 9 | Plugin marketplace, workflow engine, audit logs | 📋 Planned |
-| 10 | Cross-platform CI/CD, Homebrew, Docker, crates.io | 📋 Planned |
+QuectoClaw is built on a modular, event-driven architecture:
 
-See [plan.md](plan.md) for detailed roadmap.
+```mermaid
+graph TD
+    CLI[CLI / TUI] --> Loop[Agent Loop]
+    Loop --> Provider[LLM Provider]
+    Loop --> Tools[Tool Registry]
+    Loop --> Memory[Vector Memory]
+    
+    Tools --> Builtin[Built-in Tools]
+    Tools --> MCP[MCP Client]
+    Tools --> WASM[WASM Runtime]
+    
+    MCP --> ext[External MCP Servers]
+    
+    Loop --> Audit[Audit Logger]
+    Loop --> Gateway[Multi-Channel Gateway]
+    
+    Gateway --> Telegram
+    Gateway --> Discord
+```
+
+See [plan.md](plan.md) for a detailed deep-dive.
 
 ---
 
-## License
+## 🗺️ Roadmap
 
-[Apache License 2.0](LICENSE)
+| Phase | Feature | Status |
+|-------|---------|--------|
+| **1-6** | Core Agent, Streaming, TUI, Split-Brain | ✅ Complete |
+| **7** | **MCP Support**, Vector DB, Web UI | ✅ Complete |
+| **8** | **Audit Logging**, Workflow Engine | ✅ Complete |
+| **9** | **WASM Runtime**, Plugin Marketplace | ✅ Complete |
+| **10** | Cross-platform Binaries, Docker, Homebrew | 🚧 In Progress |
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Please follow these steps:
+1. Fork the repo.
+2. Create a feature branch (`git checkout -b feature/amazing-feature`).
+3. Commit your changes (Standard Conventional Commits).
+4. Push to the branch.
+5. Open a Pull Request.
+
+**Development Commands:**
+```bash
+cargo test          # Run all tests
+cargo clippy        # Lint code
+cargo fmt           # Format code
+```
+
+---
+
+## 📄 License
+
+Distributed under the Apache 2.0 License. See `LICENSE` for more information.
 
 ---
 
 <p align="center">
-  <sub>Built with 🦀 Rust • Inspired by <a href="https://github.com/sipeed/picoclaw">PicoClaw</a></sub>
+  <sub>Built with ❤️ by the QuectoClaw Team.</sub>
 </p>

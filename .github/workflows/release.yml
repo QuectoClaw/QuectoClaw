@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package archive (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          NAME="quectoclaw-${VERSION}-${{ matrix.target }}"
+          mkdir -p dist/${NAME}
+          cp "target/${{ matrix.target }}/release/quectoclaw" "dist/${NAME}/"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          rm -rf "dist/${NAME}"
+          shasum -a 256 "dist/${NAME}.tar.gz" > "dist/${NAME}.tar.gz.sha256"
+
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Version = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "dev" }
+          $Name = "quectoclaw-$Version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "dist/$Name" -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/quectoclaw.exe" "dist/$Name/quectoclaw.exe"
+          Compress-Archive -Path "dist/$Name/*" -DestinationPath "dist/$Name.zip" -Force
+          Remove-Item -Recurse -Force "dist/$Name"
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/$Name.zip").Hash.ToLower()
+          "$hash  $Name.zip" | Out-File -FilePath "dist/$Name.zip.sha256" -Encoding ascii
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate release notes header
+        shell: bash
+        run: |
+          cat > RELEASE_NOTES.md << 'EOF'
+          ## QuectoClaw release artifacts
+
+          Downloads include platform-specific binaries and SHA256 checksum files.
+
+          Verify checksum example:
+          ```bash
+          sha256sum -c quectoclaw-<tag>-<target>.<ext>.sha256
+          ```
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/*
+          body_path: RELEASE_NOTES.md
