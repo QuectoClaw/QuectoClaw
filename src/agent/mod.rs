@@ -15,6 +15,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+struct InternalToolResult {
+    tool_call_id: String,
+    tool_name: String,
+    output: String,
+    success: bool,
+    duration: std::time::Duration,
+}
+
 pub struct AgentLoop {
     config: Config,
     provider: Arc<dyn LLMProvider>,
@@ -315,7 +323,7 @@ impl AgentLoop {
     }
 
     /// Execute tool calls in parallel using tokio::JoinSet.
-    async fn execute_tools(&self, tool_calls: &[ToolCall]) -> Vec<crate::tool::ToolResult> {
+    async fn execute_tools(&self, tool_calls: &[ToolCall]) -> Vec<InternalToolResult> {
         use tokio::task::JoinSet;
 
         let mut set = JoinSet::new();
@@ -327,6 +335,7 @@ impl AgentLoop {
             let args = tc.parsed_arguments();
             let reg = registry.clone();
             let m = metrics.clone();
+            let id = tc.id.clone();
 
             set.spawn(async move {
                 let start = std::time::Instant::now();
@@ -334,18 +343,31 @@ impl AgentLoop {
                 let result = reg.execute(&name, args_converted).await;
                 let duration = start.elapsed();
                 m.record_tool_call(&name, !result.is_error, duration).await;
-                result
+                
+                InternalToolResult {
+                    tool_call_id: id,
+                    tool_name: name,
+                    output: result.for_llm,
+                    success: !result.is_error,
+                    duration,
+                }
             });
         }
 
         let mut results = Vec::with_capacity(tool_calls.len());
         while let Some(result) = set.join_next().await {
             match result {
-                Ok(tool_result) => results.push(tool_result),
-                Err(e) => results.push(crate::tool::ToolResult::error(format!(
-                    "Tool execution panicked: {}",
-                    e
-                ))),
+                Ok(res) => results.push(res),
+                Err(e) => {
+                    // This shouldn't really happen unless there's a serious bug in an async tool
+                    results.push(InternalToolResult {
+                        tool_call_id: "unknown".to_string(),
+                        tool_name: "panic".to_string(),
+                        output: format!("Tool execution panicked: {}", e),
+                        success: false,
+                        duration: std::time::Duration::from_secs(0),
+                    });
+                }
             }
         }
 

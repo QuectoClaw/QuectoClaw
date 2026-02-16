@@ -590,6 +590,7 @@ async fn gateway_cmd(config_path: Option<String>, use_dashboard: bool) {
     if use_dashboard {
         use quectoclaw::tui::app::TuiState;
         let state = TuiState::new();
+        quectoclaw::logger::attach_tui(state.clone());
         agent_loop.set_tui_state(state.clone());
         tui_state = Some(state);
     }
@@ -634,6 +635,7 @@ async fn gateway_cmd(config_path: Option<String>, use_dashboard: bool) {
 async fn dashboard_cmd(config_path: Option<String>) {
     let cfg = load_config(config_path.as_deref());
     let state = quectoclaw::tui::app::TuiState::new();
+    quectoclaw::logger::attach_tui(state.clone());
 
     if let Err(e) = quectoclaw::tui::run(state, cfg).await {
         eprintln!("{} Dashboard error: {}", LOGO, e);

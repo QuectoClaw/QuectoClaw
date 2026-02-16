@@ -19,6 +19,8 @@ pub enum ConfigError {
     MissingApiKey,
     #[error("workspace path is invalid or inaccessible: {0}")]
     InvalidWorkspace(String),
+    #[error("{0}")]
+    Other(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -610,7 +612,7 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         // 1. Ensure at least one API key is present
         if self.resolve_provider().is_none() {
-            return Err(ConfigError::Message(
+            return Err(ConfigError::Other(
                 "No API key found for any provider. Please add an API key (e.g. 'openai') to your config.json or set QUECTOCLAW_PROVIDERS_OPENAI_API_KEY environment variable.".to_string()
             ));
         }

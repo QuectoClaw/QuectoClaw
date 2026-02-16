@@ -59,6 +59,7 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+    Debug,
     Tool,
     Llm,
 }
@@ -71,6 +72,7 @@ impl LogLevel {
             LogLevel::Error => "✖",
             LogLevel::Tool => "⚙",
             LogLevel::Llm => "🤖",
+            LogLevel::Debug => "🔍",
         }
     }
 }
@@ -103,6 +105,22 @@ impl TuiState {
                 is_running: true,
             })),
         }
+    }
+
+    /// Synchronous version for use in tracing layers
+    pub fn push_log_sync(&self, level: LogLevel, message: String) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let mut inner = inner.write().await;
+            if inner.logs.len() >= MAX_LOG_ENTRIES {
+                inner.logs.pop_front();
+            }
+            inner.logs.push_back(LogEntry {
+                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                level,
+                message,
+            });
+        });
     }
 
     pub async fn push_log(&self, level: LogLevel, message: impl Into<String>) {
@@ -255,5 +273,63 @@ impl TuiState {
 impl Default for TuiState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tracing Integration
+// ---------------------------------------------------------------------------
+
+pub struct TuiLayer {
+    state: TuiState,
+}
+
+impl TuiLayer {
+    pub fn new(state: TuiState) -> Self {
+        Self { state }
+    }
+}
+
+impl<S> tracing_subscriber::Layer<S> for TuiLayer
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut visitor = LogVisitor::default();
+        event.record(&mut visitor);
+
+        let level = match *event.metadata().level() {
+            tracing::Level::ERROR => LogLevel::Error,
+            tracing::Level::WARN => LogLevel::Warn,
+            tracing::Level::INFO => LogLevel::Info,
+            _ => LogLevel::Debug,
+        };
+
+        if !visitor.message.is_empty() {
+            self.state.push_log_sync(level, visitor.message);
+        }
+    }
+}
+
+#[derive(Default)]
+struct LogVisitor {
+    message: String,
+}
+
+impl tracing::field::Visit for LogVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.message = format!("{:?}", value);
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        }
     }
 }

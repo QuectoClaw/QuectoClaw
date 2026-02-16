@@ -225,6 +225,7 @@ fn render_logs(frame: &mut Frame, area: Rect, logs: &[LogEntry]) {
                 LogLevel::Error => Color::Red,
                 LogLevel::Tool => Color::Cyan,
                 LogLevel::Llm => Color::Magenta,
+                LogLevel::Debug => Color::DarkGray,
             };
 
             ListItem::new(Line::from(vec![
