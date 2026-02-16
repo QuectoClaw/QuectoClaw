@@ -12,12 +12,21 @@ use tokio::sync::RwLock;
 
 pub struct VectorIndexTool {
     store: Arc<RwLock<VectorStore>>,
+    provider: Arc<dyn crate::provider::LLMProvider>,
     workspace: String,
 }
 
 impl VectorIndexTool {
-    pub fn new(store: Arc<RwLock<VectorStore>>, workspace: String) -> Self {
-        Self { store, workspace }
+    pub fn new(
+        store: Arc<RwLock<VectorStore>>,
+        provider: Arc<dyn crate::provider::LLMProvider>,
+        workspace: String,
+    ) -> Self {
+        Self {
+            store,
+            provider,
+            workspace,
+        }
     }
 }
 
@@ -92,20 +101,29 @@ impl Tool for VectorIndexTool {
 
         // Chunk and index
         let chunks = chunk_text(&content, 1000);
+
+        // Generate embeddings for all chunks
+        let embeddings = match self.provider.embeddings(chunks.clone(), "").await {
+            Ok(e) => e,
+            Err(e) => return ToolResult::error(format!("Failed to generate embeddings: {}", e)),
+        };
+
         let mut store = self.store.write().await;
 
-        if chunks.len() == 1 {
+        for (i, (chunk, emb)) in chunks.iter().zip(embeddings).enumerate() {
+            let chunk_id = if chunks.len() == 1 {
+                source_id.clone()
+            } else {
+                format!("{}#chunk-{}", source_id, i)
+            };
+
             let mut metadata = HashMap::new();
             metadata.insert("source".to_string(), source_id.clone());
-            store.add_document(&source_id, &content, metadata);
-        } else {
-            for (i, chunk) in chunks.iter().enumerate() {
-                let chunk_id = format!("{}#chunk-{}", source_id, i);
-                let mut metadata = HashMap::new();
-                metadata.insert("source".to_string(), source_id.clone());
+            if chunks.len() > 1 {
                 metadata.insert("chunk".to_string(), format!("{}/{}", i + 1, chunks.len()));
-                store.add_document(&chunk_id, chunk, metadata);
             }
+
+            store.add_document_with_embedding(&chunk_id, chunk, metadata, emb);
         }
 
         // Persist to workspace

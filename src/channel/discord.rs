@@ -17,7 +17,7 @@ mod implementation {
 
     #[async_trait]
     impl EventHandler for Handler {
-        async fn message(&self, ctx: Context, msg: Message) {
+        async fn message(&self, _ctx: Context, msg: Message) {
             if msg.author.bot {
                 return;
             }
@@ -85,7 +85,7 @@ mod implementation {
                 .await?;
 
             let running_clone = self.running.clone();
-            let client_ptr = self.client.clone();
+            let _client_ptr = self.client.clone();
 
             // We can't easily "stop" serenity client once it starts with .start()
             // but we can spawn it.
@@ -116,7 +116,7 @@ mod implementation {
                 "content": msg.content,
             });
 
-            http.send_message(channel_id.into(), &map, vec![]).await?;
+            http.send_message(channel_id.into(), vec![], &map).await?;
 
             Ok(())
         }

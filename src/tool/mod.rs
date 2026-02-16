@@ -95,13 +95,23 @@ pub trait Tool: Send + Sync {
 #[derive(Clone)]
 pub struct ToolRegistry {
     tools: Arc<RwLock<HashMap<String, Arc<dyn Tool>>>>,
+    vector_store: Arc<RwLock<Option<Arc<RwLock<crate::vectordb::VectorStore>>>>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: Arc::new(RwLock::new(HashMap::new())),
+            vector_store: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub async fn set_vector_store(&self, store: Arc<RwLock<crate::vectordb::VectorStore>>) {
+        *self.vector_store.write().await = Some(store);
+    }
+
+    pub async fn get_vector_store(&self) -> Option<Arc<RwLock<crate::vectordb::VectorStore>>> {
+        self.vector_store.read().await.clone()
     }
 
     pub async fn register(&self, tool: Arc<dyn Tool>) {

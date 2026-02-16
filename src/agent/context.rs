@@ -4,7 +4,11 @@ use crate::tool::ToolRegistry;
 use std::path::Path;
 
 /// Build the system prompt from workspace template files and tool descriptions.
-pub async fn build_system_prompt(workspace: &str, tools: &ToolRegistry) -> String {
+pub async fn build_system_prompt(
+    workspace: &str,
+    tools: &ToolRegistry,
+    retrieved_context: &str,
+) -> String {
     let mut parts = Vec::new();
 
     // Core identity
@@ -53,6 +57,11 @@ pub async fn build_system_prompt(workspace: &str, tools: &ToolRegistry) -> Strin
         if !trimmed.is_empty() {
             parts.push(format!("\n## Long-Term Memory\n{}", trimmed));
         }
+    }
+
+    // Retrieved RAG context
+    if !retrieved_context.is_empty() {
+        parts.push(retrieved_context.to_string());
     }
 
     parts.join("\n")

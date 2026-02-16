@@ -2,11 +2,12 @@
 
 use super::{http::HTTPProvider, LLMProvider};
 use crate::config::Config;
+use std::sync::Arc;
 
 /// Create an LLM provider from the loaded config.
 ///
 /// Auto-detects the provider from the model name and resolves API credentials.
-pub fn create_provider(cfg: &Config) -> anyhow::Result<Box<dyn LLMProvider>> {
+pub fn create_provider(cfg: &Config) -> anyhow::Result<Arc<dyn LLMProvider>> {
     let (api_key, api_base, provider_name) = cfg
         .resolve_provider()
         .ok_or_else(|| anyhow::anyhow!(
@@ -30,5 +31,5 @@ pub fn create_provider(cfg: &Config) -> anyhow::Result<Box<dyn LLMProvider>> {
 
     let provider = HTTPProvider::new(api_key, api_base, proxy, cfg.agents.defaults.model.clone())?;
 
-    Ok(Box::new(provider))
+    Ok(Arc::new(provider))
 }

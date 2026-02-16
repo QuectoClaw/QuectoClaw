@@ -205,5 +205,8 @@ pub trait LLMProvider: Send + Sync {
         Ok(())
     }
 
+    /// Generate embeddings for a list of texts.
+    async fn embeddings(&self, texts: Vec<String>, model: &str) -> anyhow::Result<Vec<Vec<f32>>>;
+
     fn default_model(&self) -> &str;
 }

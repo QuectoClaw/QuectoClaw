@@ -12,11 +12,15 @@ use tokio::sync::RwLock;
 
 pub struct VectorSearchTool {
     store: Arc<RwLock<VectorStore>>,
+    provider: Arc<dyn crate::provider::LLMProvider>,
 }
 
 impl VectorSearchTool {
-    pub fn new(store: Arc<RwLock<VectorStore>>) -> Self {
-        Self { store }
+    pub fn new(
+        store: Arc<RwLock<VectorStore>>,
+        provider: Arc<dyn crate::provider::LLMProvider>,
+    ) -> Self {
+        Self { store, provider }
     }
 }
 
@@ -56,8 +60,17 @@ impl Tool for VectorSearchTool {
 
         let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
+        // Generate embedding for query
+        let query_vec = match self.provider.embeddings(vec![query.to_string()], "").await {
+            Ok(vecs) => match vecs.first() {
+                Some(v) => v.clone(),
+                None => return ToolResult::error("Failed to generate embedding: empty result"),
+            },
+            Err(e) => return ToolResult::error(format!("Failed to generate embedding: {}", e)),
+        };
+
         let store = self.store.read().await;
-        let results = store.search(query, top_k);
+        let results = store.search_by_embedding(&query_vec, top_k);
 
         if results.is_empty() {
             return ToolResult::success("No matching documents found.");

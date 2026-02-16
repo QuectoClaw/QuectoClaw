@@ -51,6 +51,8 @@ pub struct Config {
     pub cost: CostConfig,
     #[serde(default)]
     pub wasm: WasmConfig,
+    #[serde(default)]
+    pub marketplace: MarketConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -897,4 +899,23 @@ mod tests {
         assert_eq!(key, "sk-test");
         assert_eq!(name, "gpt");
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketConfig {
+    #[serde(default = "default_registry_url")]
+    pub registry_url: String,
+}
+
+impl Default for MarketConfig {
+    fn default() -> Self {
+        Self {
+            registry_url: default_registry_url(),
+        }
+    }
+}
+
+fn default_registry_url() -> String {
+    "https://raw.githubusercontent.com/mohammad-albarham/QuectoClaw/main/registry/plugins.json"
+        .into()
 }

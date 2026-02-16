@@ -1,0 +1,7 @@
+name: Test Workflow
+description: A simple workflow to verify the implementation
+steps:
+  - name: Create File
+    prompt: "Create a file named workflow_test.txt with the content '{{ message }}'"
+  - name: Read File
+    prompt: "Read the content of workflow_test.txt and tell me what it says."

@@ -35,6 +35,7 @@ pub struct AgentLoop {
     tui_state: Option<TuiState>,
     rate_limiter: Arc<RateLimiter>,
     router: ModelRouter,
+    audit_logger: Arc<crate::audit::AuditLogger>,
 }
 
 struct RateLimiter {
@@ -103,6 +104,9 @@ impl AgentLoop {
             config.agents.defaults.model.clone(),
         );
 
+        let audit_path = std::path::PathBuf::from(&workspace).join("audit.jsonl");
+        let audit_logger = Arc::new(crate::audit::AuditLogger::new(audit_path));
+
         Self {
             config,
             provider,
@@ -114,6 +118,7 @@ impl AgentLoop {
             tui_state: None,
             rate_limiter: Arc::new(RateLimiter::new(rate_limit_requests, rate_limit_seconds)),
             router,
+            audit_logger,
         }
     }
 
@@ -174,7 +179,35 @@ impl AgentLoop {
         }
 
         // 1. Build system prompt
-        let system_prompt = context::build_system_prompt(&self.workspace, &self.tools).await;
+        // PERFORM RAG: semantic search in vector store
+        let mut retrieved_context = String::new();
+        let store_path = Path::new(&self.workspace).join("memory/vectordb.json");
+        if store_path.exists() {
+            // Attempt semantic search
+            if let Ok(embeddings) = self
+                .provider
+                .embeddings(vec![user_message.to_string()], "")
+                .await
+            {
+                if let Some(query_vec) = embeddings.first() {
+                    let store = self.tools.get_vector_store().await;
+                    if let Some(s) = store {
+                        let locked = s.read().await;
+                        let results = locked.search_by_embedding(query_vec, 3);
+                        if !results.is_empty() {
+                            retrieved_context
+                                .push_str("\n## Relevant Context from Long-Term Memory\n");
+                            for res in results {
+                                retrieved_context.push_str(&format!("- {}\n", res.text));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let system_prompt =
+            context::build_system_prompt(&self.workspace, &self.tools, &retrieved_context).await;
 
         // 2. Build message history
         let mut messages = Vec::new();
@@ -197,6 +230,16 @@ impl AgentLoop {
 
         // Add current user message
         let user_msg = Message::user(user_message);
+        let _ = self
+            .audit_logger
+            .log(
+                session_key,
+                crate::audit::AuditEvent::Message {
+                    role: "user".to_string(),
+                    content: user_message.to_string(),
+                },
+            )
+            .await;
         messages.push(user_msg.clone());
         self.sessions.add_message(session_key, user_msg).await;
 
@@ -359,6 +402,17 @@ impl AgentLoop {
             if !response.has_tool_calls() {
                 final_content = response.content.clone();
 
+                let _ = self
+                    .audit_logger
+                    .log(
+                        session_key,
+                        crate::audit::AuditEvent::Message {
+                            role: "assistant".to_string(),
+                            content: final_content.clone(),
+                        },
+                    )
+                    .await;
+
                 // Save assistant response to session
                 let assistant_msg = Message::assistant(&response.content);
                 self.sessions.add_message(session_key, assistant_msg).await;
@@ -395,7 +449,23 @@ impl AgentLoop {
             let tool_results = self.execute_tools(&tool_calls).await;
 
             // Add tool results as messages
-            for result in tool_results {
+            for (tc, result) in tool_calls.iter().zip(&tool_results) {
+                let _ = self
+                    .audit_logger
+                    .log(
+                        session_key,
+                        crate::audit::AuditEvent::ToolExecution {
+                            name: tc.function_name().to_string(),
+                            args: serde_json::to_value(tc.parsed_arguments())
+                                .unwrap_or(serde_json::json!({})),
+                            result: serde_json::json!({
+                                "output": result.output,
+                                "success": result.success,
+                            }),
+                        },
+                    )
+                    .await;
+
                 if let Some(tui) = &self.tui_state {
                     tui.handle_event(TuiEvent::ToolResult {
                         tool: result.tool_name.clone(),
@@ -523,6 +593,26 @@ impl AgentLoop {
             .set_summary(session_key, response.content)
             .await;
 
+        Ok(())
+    }
+
+    /// Run a multi-step workflow.
+    pub async fn run_workflow(
+        &self,
+        workflow: crate::workflow::Workflow,
+        session_key: &str,
+    ) -> anyhow::Result<()> {
+        tracing::info!(workflow = %workflow.name, "Starting workflow execution");
+
+        for step in workflow.steps {
+            tracing::info!(step = %step.name, "Executing workflow step");
+            // Each step is processed as a direct message in the same session.
+            let _ = self
+                .run_agent_loop(&step.prompt, session_key, true, None)
+                .await?;
+        }
+
+        tracing::info!(workflow = %workflow.name, "Workflow execution completed");
         Ok(())
     }
 

@@ -266,6 +266,58 @@ impl LLMProvider for HTTPProvider {
         process_sse_stream(response, tx).await
     }
 
+    async fn embeddings(&self, texts: Vec<String>, model: &str) -> anyhow::Result<Vec<Vec<f32>>> {
+        let use_model = if model.is_empty() {
+            "text-embedding-3-small"
+        } else {
+            model
+        };
+        let url = format!("{}/embeddings", self.api_base.trim_end_matches('/'));
+
+        let body = json!({
+            "model": use_model,
+            "input": texts,
+        });
+
+        let res = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = res.status();
+        let response_body = res.text().await?;
+
+        if !status.is_success() {
+            anyhow::bail!("Embeddings API error ({}): {}", status, response_body);
+        }
+
+        let v: serde_json::Value = serde_json::from_str(&response_body)?;
+        let data = v
+            .get("data")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| anyhow::anyhow!("No data in embeddings response: {}", response_body))?;
+
+        let mut result = Vec::with_capacity(data.len());
+        for entry in data {
+            let embedding = entry
+                .get("embedding")
+                .and_then(|e| e.as_array())
+                .ok_or_else(|| anyhow::anyhow!("No embedding in data entry"))?;
+
+            let vec: Vec<f32> = embedding
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                .collect();
+            result.push(vec);
+        }
+
+        Ok(result)
+    }
+
     fn default_model(&self) -> &str {
         &self.model
     }
