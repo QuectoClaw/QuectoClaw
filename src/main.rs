@@ -241,8 +241,14 @@ async fn interactive_mode(agent: Arc<AgentLoop>, session: &str) {
                             println!("Commands:");
                             println!("  /fork [name]  — Branch this conversation");
                             println!("  /clear        — Clear session (auto-backs up)");
+                            println!("  /metrics      — Show performance metrics");
                             println!("  /help         — Show this help");
                             println!("  exit          — Quit\n");
+                            continue;
+                        }
+                        "/metrics" => {
+                            let report = agent.metrics().format_report().await;
+                            println!("{}\n", report);
                             continue;
                         }
                         _ => {

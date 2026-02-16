@@ -7,6 +7,7 @@ pub mod bus;
 pub mod channel;
 pub mod config;
 pub mod logger;
+pub mod metrics;
 pub mod provider;
 pub mod session;
 pub mod tool;

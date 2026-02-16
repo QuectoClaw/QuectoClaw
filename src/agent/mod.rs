@@ -6,6 +6,7 @@ pub mod memory;
 
 use crate::bus::{InboundMessage, MessageBus, OutboundMessage};
 use crate::config::Config;
+use crate::metrics::Metrics;
 use crate::provider::{LLMProvider, Message, ToolCall};
 use crate::session::SessionManager;
 use crate::tool::ToolRegistry;
@@ -20,6 +21,7 @@ pub struct AgentLoop {
     sessions: SessionManager,
     bus: Arc<MessageBus>,
     workspace: String,
+    metrics: Metrics,
 }
 
 impl AgentLoop {
@@ -43,6 +45,7 @@ impl AgentLoop {
             sessions,
             bus,
             workspace,
+            metrics: Metrics::new(),
         }
     }
 
@@ -144,6 +147,8 @@ impl AgentLoop {
                 "Running LLM iteration"
             );
 
+            let llm_start = std::time::Instant::now();
+
             // Call LLM (streaming on last iteration or when no tool calls expected)
             let response = if let Some(ref tx) = stream_tx {
                 // Use streaming — tokens will be sent via tx
@@ -188,7 +193,9 @@ impl AgentLoop {
                     .await?
             };
 
-            // Log usage
+            let llm_duration = llm_start.elapsed();
+
+            // Log usage and record metrics
             if let Some(ref usage) = response.usage {
                 tracing::info!(
                     prompt_tokens = usage.prompt_tokens,
@@ -196,6 +203,18 @@ impl AgentLoop {
                     total_tokens = usage.total_tokens,
                     "Token usage"
                 );
+                self.metrics
+                    .record_llm_call(
+                        model,
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        llm_duration,
+                    )
+                    .await;
+            } else {
+                self.metrics
+                    .record_llm_call(model, 0, 0, llm_duration)
+                    .await;
             }
 
             // If no tool calls, we're done
@@ -251,15 +270,21 @@ impl AgentLoop {
 
         let mut set = JoinSet::new();
         let registry = self.tools.clone();
+        let metrics = self.metrics.clone();
 
         for tc in tool_calls {
             let name = tc.function_name().to_string();
             let args = tc.parsed_arguments();
             let reg = registry.clone();
+            let m = metrics.clone();
 
             set.spawn(async move {
+                let start = std::time::Instant::now();
                 let args_converted: HashMap<String, serde_json::Value> = args;
-                reg.execute(&name, args_converted).await
+                let result = reg.execute(&name, args_converted).await;
+                let duration = start.elapsed();
+                m.record_tool_call(&name, !result.is_error, duration).await;
+                result
             });
         }
 
@@ -369,5 +394,10 @@ impl AgentLoop {
     /// Fork a session into a new session key.
     pub async fn fork_session(&self, source_key: &str, target_key: &str) -> bool {
         self.sessions.fork_session(source_key, target_key).await
+    }
+
+    /// Get metrics collector reference.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 }
