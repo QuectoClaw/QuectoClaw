@@ -38,7 +38,7 @@ anyhow = "1"
 url = "2"
 
 # Interactive readline
-rustyline = "15"
+rustyline = "17"
 
 # Async channels (already in tokio, but for convenience)
 async-trait = "0.1"
