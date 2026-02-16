@@ -44,7 +44,7 @@ rustyline = "15"
 async-trait = "0.1"
 
 # Telegram bot
-teloxide = { version = "0.13", features = ["macros"], optional = true }
+teloxide = { version = "0.17", features = ["macros"], optional = true }
 
 # Discord bot
 serenity = { version = "0.12", features = ["client", "gateway", "model"], optional = true }
