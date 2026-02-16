@@ -23,6 +23,7 @@ use tower_http::cors::{Any, CorsLayer};
 pub struct WebState {
     pub metrics: Metrics,
     pub config: Config,
+    pub agent: Arc<crate::agent::AgentLoop>,
     pub dashboard_token: String,
 }
 
@@ -60,6 +61,7 @@ pub async fn start_web_server(
     addr: SocketAddr,
     metrics: Metrics,
     config: Config,
+    agent: Arc<crate::agent::AgentLoop>,
 ) -> anyhow::Result<()> {
     // Enforce localhost-only binding unless explicitly allowed
     let ip = addr.ip();
@@ -81,6 +83,7 @@ pub async fn start_web_server(
     let state = Arc::new(WebState {
         metrics,
         config,
+        agent,
         dashboard_token,
     });
 
@@ -95,6 +98,7 @@ pub async fn start_web_server(
     let api_routes = Router::new()
         .route("/api/metrics", axum::routing::get(handlers::api_metrics))
         .route("/api/status", axum::routing::get(handlers::api_status))
+        .route("/api/chat/stream", axum::routing::post(handlers::api_chat_stream))
         .layer(middleware::from_fn(move |req, next| {
             let s = api_state.clone();
             auth_middleware(s, req, next)

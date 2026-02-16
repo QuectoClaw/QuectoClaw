@@ -831,13 +831,40 @@ async fn webui_cmd(config_path: Option<String>, port: u16) {
     let cfg = load_config(config_path.as_deref());
     let metrics = quectoclaw::metrics::Metrics::new();
 
+    let provider = match create_provider(&cfg) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{} Error: {}", LOGO, e);
+            std::process::exit(1);
+        }
+    };
+
+    let workspace = cfg
+        .workspace_path()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/quectoclaw"));
+
+    let ws_str = workspace.to_string_lossy().to_string();
+    let restrict = cfg.agents.defaults.restrict_to_workspace;
+
+    let tools = create_tool_registry(&ws_str, restrict, &cfg, provider.clone()).await;
+    let bus = Arc::new(MessageBus::new());
+
+    let agent_loop = AgentLoop::new(cfg.clone(), provider, tools.clone(), bus);
+    let agent_arc = Arc::new(agent_loop);
+
+    // Register subagent tool
+    let agent_clone = agent_arc.clone();
+    tools
+        .register(Arc::new(SubagentTool::new(agent_clone)))
+        .await;
+
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     println!(
         "{} QuectoClaw Web Dashboard starting at http://localhost:{}",
         LOGO, port
     );
 
-    if let Err(e) = quectoclaw::web::start_web_server(addr, metrics, cfg).await {
+    if let Err(e) = quectoclaw::web::start_web_server(addr, metrics, cfg, agent_arc).await {
         eprintln!("{} Web UI error: {}", LOGO, e);
         std::process::exit(1);
     }

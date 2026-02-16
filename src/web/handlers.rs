@@ -1,9 +1,12 @@
 // QuectoClaw — Web UI handlers
 
 use super::WebState;
-use axum::extract::State;
-use axum::response::{Html, Json};
+use axum::extract::{Query, State};
+use axum::response::sse::{Event, Sse};
+use axum::response::{Html, IntoResponse, Json};
+use serde::Deserialize;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// Escape HTML special characters to prevent XSS.
 fn html_escape(s: &str) -> String {
@@ -53,6 +56,7 @@ pub async fn api_status(State(state): State<Arc<WebState>>) -> Json<serde_json::
     let model = &state.config.agents.defaults.model;
 
     Json(serde_json::json!({
+        "status": "online",
         "version": crate::VERSION,
         "model": model,
         "provider": provider.as_ref().map(|(_, _, n)| n.as_str()).unwrap_or("none"),
@@ -61,6 +65,76 @@ pub async fn api_status(State(state): State<Arc<WebState>>) -> Json<serde_json::
         "cost_tracking_enabled": state.config.cost.enabled,
         "budget_limit": state.config.cost.budget_limit,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatRequest {
+    pub message: String,
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatParams {
+    pub compact: Option<bool>,
+}
+
+/// Streaming chat API (SSE).
+pub async fn api_chat_stream(
+    State(state): State<Arc<WebState>>,
+    Query(_params): Query<ChatParams>,
+    Json(payload): Json<ChatRequest>,
+) -> impl IntoResponse {
+    let agent = state.agent.clone();
+    let message = payload.message;
+    let session = payload.session.unwrap_or_else(|| "watch-default".to_string());
+
+    let (tx, rx) = mpsc::channel(100);
+
+    // Run agent in background task
+    let agent_bg = agent.clone();
+    let message_bg = message.clone();
+    let session_bg = session.clone();
+    let tx_bg = tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = agent_bg.process_direct_streaming(&message_bg, &session_bg, tx_bg.clone()).await {
+            let _ = tx_bg.send(crate::provider::StreamEvent::Error(e.to_string())).await;
+        }
+    });
+
+    // Convert mpsc receiver to SSE stream
+    let stream_session = session.clone();
+    let stream = futures_util::stream::unfold((rx, stream_session), |(mut rx, session)| async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                crate::provider::StreamEvent::Token(token) => {
+                    let data = serde_json::json!({ "token": token }).to_string();
+                    return Some((Ok::<Event, std::convert::Infallible>(Event::default().data(data)), (rx, session)));
+                }
+                crate::provider::StreamEvent::ToolCallDelta { name: Some(name), .. } => {
+                    let data = serde_json::json!({ "tool": name }).to_string();
+                    return Some((Ok::<Event, std::convert::Infallible>(Event::default().data(data)), (rx, session)));
+                }
+                crate::provider::StreamEvent::Done(resp) => {
+                    let data = serde_json::json!({
+                        "done": true,
+                        "response": resp.content,
+                        "session": session,
+                        "model": resp.finish_reason,
+                        "tokens_used": resp.usage.map(|u| u.total_tokens).unwrap_or(0)
+                    }).to_string();
+                    return Some((Ok::<Event, std::convert::Infallible>(Event::default().data(data)), (rx, session)));
+                }
+                crate::provider::StreamEvent::Error(err) => {
+                    let data = serde_json::json!({ "error": err }).to_string();
+                    return Some((Ok::<Event, std::convert::Infallible>(Event::default().data(data)), (rx, session)));
+                }
+                _ => {}
+            }
+        }
+        None
+    });
+
+    Sse::new(stream)
 }
 
 /// HTMX partial fragment for live-updating metrics panel.
