@@ -5,12 +5,13 @@
 <h1 align="center">QuectoClaw</h1>
 
 <p align="center">
-  <strong>Ultra-efficient AI Coding Assistant — Built in Rust 🦀</strong>
+  <strong>Ultra-efficient AI Coding Assistant — Built in Rust 🦀</strong><br>
+  <sub>(We call it <b>QuectoClaw</b>)</sub>
 </p>
 
 <p align="center">
-  <a href="https://github.com/mohammad-albarham/QuectoClaw/actions"><img src="https://img.shields.io/github/actions/workflow/status/mohammad-albarham/QuectoClaw/ci.yml?branch=master&style=flat-square&label=CI" alt="CI Status" /></a>
-  <a href="https://github.com/mohammad-albarham/QuectoClaw/releases"><img src="https://img.shields.io/github/v/release/mohammad-albarham/QuectoClaw?style=flat-square&color=blue" alt="Release" /></a>
+  <a href="https://github.com/QuectoClaw/QuectoClaw/actions"><img src="https://img.shields.io/github/actions/workflow/status/QuectoClaw/QuectoClaw/ci.yml?branch=master&style=flat-square&label=CI" alt="CI Status" /></a>
+  <a href="https://github.com/QuectoClaw/QuectoClaw/releases"><img src="https://img.shields.io/github/v/release/QuectoClaw/QuectoClaw?style=flat-square&color=blue" alt="Release" /></a>
   <a href="#-built-in-tool-suite"><img src="https://img.shields.io/badge/Tools-12%2B-blue?style=flat-square" alt="Tools" /></a>
   <a href="#-installation"><img src="https://img.shields.io/badge/Binary-%3C5MB-success?style=flat-square" alt="Size" /></a>
   <a href="#-model-context-protocol-mcp"><img src="https://img.shields.io/badge/MCP-Supported-orange?style=flat-square" alt="MCP Ready" /></a>
@@ -56,7 +57,7 @@ It connects to any **OpenAI-compatible LLM** (OpenAI, Anthropic, Ollama, Groq, a
 Requires [Rust](https://rustup.rs/) 1.70+.
 
 ```bash
-git clone https://github.com/mohammad-albarham/QuectoClaw.git
+git clone https://github.com/QuectoClaw/QuectoClaw.git
 cd QuectoClaw
 cargo build --release
 ```
@@ -66,13 +67,13 @@ The optimized binary will be at `target/release/quectoclaw` (typically <5 MB).
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew install mohammad-albarham/tap/quectoclaw
+brew install QuectoClaw/tap/quectoclaw
 ```
 
 ### Docker
 
 ```bash
-docker pull ghcr.io/mohammad-albarham/quectoclaw:latest
+docker pull ghcr.io/quectoclaw/quectoclaw:latest
 
 # Or build locally
 docker compose up -d
@@ -82,7 +83,7 @@ See the [Dockerfile](Dockerfile) and [docker-compose.yml](docker-compose.yml) fo
 
 ### Pre-built Binaries
 
-Download binaries for **Linux (x86_64)**, **macOS (Intel & Apple Silicon)**, and **Windows** from the [Releases](https://github.com/mohammad-albarham/QuectoClaw/releases) page.
+Download binaries for **Linux (x86_64)**, **macOS (Intel & Apple Silicon)**, and **Windows** from the [Releases](https://github.com/QuectoClaw/QuectoClaw/releases) page.
 
 ### Feature Flags
 
@@ -633,5 +634,5 @@ Distributed under the **Apache License 2.0**. See [LICENSE](LICENSE) for details
 ---
 
 <p align="center">
-  <sub>Built with ❤️ in Rust by the <a href="https://github.com/mohammad-albarham/QuectoClaw">QuectoClaw</a> community.</sub>
+  <sub>Built with ❤️ in Rust by the <a href="https://github.com/QuectoClaw/QuectoClaw">QuectoClaw</a> community.</sub>
 </p>
